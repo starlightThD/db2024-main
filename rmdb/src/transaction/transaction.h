@@ -12,11 +12,14 @@ See the Mulan PSL v2 for more details. */
 
 #include <atomic>
 #include <deque>
+#include <memory>
 #include <string>
 #include <thread>
 #include <unordered_set>
 
 #include "txn_defs.h"
+
+class Page;
 
 class Transaction {
    public:

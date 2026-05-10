@@ -44,6 +44,54 @@ class AbstractExecutor {
 
     virtual ColMeta get_col_offset(const TabCol &target) { return ColMeta();};
 
+    static int compare_raw(const char *lhs, const char *rhs, ColType type, int len) {
+        if (type == TYPE_INT) {
+            int lhs_val = *reinterpret_cast<const int *>(lhs);
+            int rhs_val = *reinterpret_cast<const int *>(rhs);
+            return (lhs_val > rhs_val) - (lhs_val < rhs_val);
+        }
+        if (type == TYPE_FLOAT) {
+            float lhs_val = *reinterpret_cast<const float *>(lhs);
+            float rhs_val = *reinterpret_cast<const float *>(rhs);
+            return (lhs_val > rhs_val) - (lhs_val < rhs_val);
+        }
+        return strncmp(lhs, rhs, len);
+    }
+
+    static bool compare_result(int cmp, CompOp op) {
+        switch (op) {
+            case OP_EQ: return cmp == 0;
+            case OP_NE: return cmp != 0;
+            case OP_LT: return cmp < 0;
+            case OP_GT: return cmp > 0;
+            case OP_LE: return cmp <= 0;
+            case OP_GE: return cmp >= 0;
+        }
+        return false;
+    }
+
+    bool eval_cond(const std::vector<ColMeta> &rec_cols, const RmRecord *rec, const Condition &cond) {
+        auto lhs_col = get_col(rec_cols, cond.lhs_col);
+        const char *lhs = rec->data + lhs_col->offset;
+        const char *rhs = nullptr;
+        if (cond.is_rhs_val) {
+            rhs = cond.rhs_val.raw->data;
+        } else {
+            auto rhs_col = get_col(rec_cols, cond.rhs_col);
+            rhs = rec->data + rhs_col->offset;
+        }
+        return compare_result(compare_raw(lhs, rhs, lhs_col->type, lhs_col->len), cond.op);
+    }
+
+    bool eval_conds(const std::vector<ColMeta> &rec_cols, const RmRecord *rec, const std::vector<Condition> &conds) {
+        for (auto &cond : conds) {
+            if (!eval_cond(rec_cols, rec, cond)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
     std::vector<ColMeta>::const_iterator get_col(const std::vector<ColMeta> &rec_cols, const TabCol &target) {
         auto pos = std::find_if(rec_cols.begin(), rec_cols.end(), [&](const ColMeta &col) {
             return col.tab_name == target.tab_name && col.name == target.col_name;
