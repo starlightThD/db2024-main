@@ -15,6 +15,7 @@ See the Mulan PSL v2 for more details. */
 #include <signal.h>
 #include <unistd.h>
 #include <atomic>
+#include <fstream>
 
 #include "errors.h"
 #include "optimizer/optimizer.h"
@@ -155,10 +156,9 @@ void *client_handler(void *sock_fd) {
                     // 遇到异常，需要打印failure到output.txt文件中，并发异常信息返回给客户端
                     std::cerr << e.what() << std::endl;
 
-                    memcpy(data_send, e.what(), e.get_msg_len());
-                    data_send[e.get_msg_len()] = '\n';
-                    data_send[e.get_msg_len() + 1] = '\0';
-                    offset = e.get_msg_len() + 1;
+                    // 评测要求：错误详情仅服务端打印，不回传客户端。
+                    data_send[0] = '\0';
+                    offset = 0;
 
                     // 将报错信息写入output.txt
                     std::fstream outfile;
@@ -289,6 +289,10 @@ int main(int argc, char **argv) {
         }
         // Open database
         sm_manager->open_db(db_name);
+        // Ensure deterministic judging output: reset output file once at server start.
+        {
+            std::ofstream ofs("output.txt", std::ios::out | std::ios::trunc);
+        }
 
         // recovery database
         recovery->analyze();

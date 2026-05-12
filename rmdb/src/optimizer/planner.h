@@ -36,7 +36,6 @@ class Planner {
    public:
     Planner(SmManager *sm_manager) : sm_manager_(sm_manager) {}
 
-
     std::shared_ptr<Plan> do_planner(std::shared_ptr<Query> query, Context *context);
 
     void set_enable_nestedloop_join(bool set_val) { enable_nestedloop_join = set_val; }

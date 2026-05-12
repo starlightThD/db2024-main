@@ -151,6 +151,32 @@ struct Col : public Expr {
             tab_name(std::move(tab_name_)), col_name(std::move(col_name_)) {}
 };
 
+enum AggType {
+    AGG_NONE,
+    AGG_SUM,
+    AGG_COUNT,
+    AGG_AVG,
+    AGG_MIN,
+    AGG_MAX,
+    AGG_COUNT_STAR
+};
+
+struct AggExpr : public Expr {
+    AggType agg_type;
+    std::shared_ptr<Col> col;
+
+    AggExpr(AggType agg_type_, std::shared_ptr<Col> col_) :
+            agg_type(agg_type_), col(std::move(col_)) {}
+};
+
+struct AliasExpr : public Expr {
+    std::shared_ptr<Expr> expr;
+    std::string alias;
+
+    AliasExpr(std::shared_ptr<Expr> expr_, std::string alias_) :
+            expr(std::move(expr_)), alias(std::move(alias_)) {}
+};
+
 struct SetClause : public TreeNode {
     std::string col_name;
     std::shared_ptr<Value> val;
@@ -160,11 +186,11 @@ struct SetClause : public TreeNode {
 };
 
 struct BinaryExpr : public TreeNode {
-    std::shared_ptr<Col> lhs;
+    std::shared_ptr<Expr> lhs;
     SvCompOp op;
     std::shared_ptr<Expr> rhs;
 
-    BinaryExpr(std::shared_ptr<Col> lhs_, SvCompOp op_, std::shared_ptr<Expr> rhs_) :
+    BinaryExpr(std::shared_ptr<Expr> lhs_, SvCompOp op_, std::shared_ptr<Expr> rhs_) :
             lhs(std::move(lhs_)), op(op_), rhs(std::move(rhs_)) {}
 };
 
@@ -215,6 +241,11 @@ struct JoinExpr : public TreeNode {
 };
 
 struct SelectStmt : public TreeNode {
+    std::vector<std::shared_ptr<Expr>> select_exprs;
+    std::vector<std::shared_ptr<Expr>> group_bys;
+    std::vector<std::vector<std::shared_ptr<BinaryExpr>>> having;
+
+    // Keep cols for compatibility with existing analyze/planner pipeline.
     std::vector<std::shared_ptr<Col>> cols;
     std::vector<std::string> tabs;
     std::vector<std::shared_ptr<BinaryExpr>> conds;
@@ -225,12 +256,23 @@ struct SelectStmt : public TreeNode {
     std::shared_ptr<OrderBy> order;
 
 
-    SelectStmt(std::vector<std::shared_ptr<Col>> cols_,
+    SelectStmt(std::vector<std::shared_ptr<Expr>> select_exprs_,
                std::vector<std::string> tabs_,
                std::vector<std::shared_ptr<BinaryExpr>> conds_,
+               std::vector<std::shared_ptr<Expr>> group_bys_,
+               std::vector<std::vector<std::shared_ptr<BinaryExpr>>> having_,
                std::shared_ptr<OrderBy> order_) :
-            cols(std::move(cols_)), tabs(std::move(tabs_)), conds(std::move(conds_)), 
+            select_exprs(std::move(select_exprs_)),
+            group_bys(std::move(group_bys_)),
+            having(std::move(having_)),
+            tabs(std::move(tabs_)),
+            conds(std::move(conds_)),
             order(std::move(order_)) {
+                for (auto &expr : select_exprs) {
+                    if (auto col = std::dynamic_pointer_cast<Col>(expr)) {
+                        cols.push_back(std::move(col));
+                    }
+                }
                 has_sort = (bool)order;
             }
 };
@@ -268,13 +310,17 @@ struct SemValue {
     std::vector<std::shared_ptr<Value>> sv_vals;
 
     std::shared_ptr<Col> sv_col;
-    std::vector<std::shared_ptr<Col>> sv_cols;
+
+    std::vector<std::shared_ptr<Expr>> sv_exprs;
 
     std::shared_ptr<SetClause> sv_set_clause;
     std::vector<std::shared_ptr<SetClause>> sv_set_clauses;
 
     std::shared_ptr<BinaryExpr> sv_cond;
     std::vector<std::shared_ptr<BinaryExpr>> sv_conds;
+    std::vector<std::shared_ptr<Expr>> sv_groupby;
+    std::vector<std::shared_ptr<BinaryExpr>> sv_having_and;
+    std::vector<std::vector<std::shared_ptr<BinaryExpr>>> sv_having_or;
 
     std::shared_ptr<OrderBy> sv_orderby;
 

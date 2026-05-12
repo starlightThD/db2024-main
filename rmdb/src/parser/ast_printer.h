@@ -109,6 +109,10 @@ private:
             std::cout << "COL\n";
             print_val(x->tab_name, offset);
             print_val(x->col_name, offset);
+        } else if (auto x = std::dynamic_pointer_cast<AliasExpr>(node)) {
+            std::cout << "ALIAS_EXPR\n";
+            print_node(x->expr, offset);
+            print_val(x->alias, offset);
         } else if (auto x = std::dynamic_pointer_cast<TypeLen>(node)) {
             std::cout << "TYPE_LEN\n";
             print_val(type2str(x->type), offset);

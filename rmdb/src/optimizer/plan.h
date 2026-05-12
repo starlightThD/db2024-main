@@ -16,6 +16,7 @@ See the Mulan PSL v2 for more details. */
 #include <string>
 #include <vector>
 #include "parser/ast.h"
+#include "analyze/analyze.h"
 
 #include "parser/parser.h"
 
@@ -42,15 +43,35 @@ typedef enum PlanTag{
     T_NestLoop,
     T_SortMerge,    // sort merge join
     T_Sort,
-    T_Projection
+    T_Projection,
+    T_Agg // 聚合
 } PlanTag;
-
 // 查询执行计划
 class Plan
 {
 public:
     PlanTag tag;
     virtual ~Plan() = default;
+};
+// 聚合计划
+class AggPlan : public Plan
+{
+    public:
+        AggPlan(PlanTag tag, std::shared_ptr<Plan> subplan, std::vector<SelectItem> select_exprs,
+                std::vector<TabCol> group_by_cols, std::vector<std::vector<HavingCond>> having_conds)
+        {
+            Plan::tag = tag;
+            subplan_ = std::move(subplan);
+            select_exprs_ = std::move(select_exprs);
+            group_by_cols_ = std::move(group_by_cols);
+            having_conds_ = std::move(having_conds);
+        }
+        ~AggPlan(){}
+        std::shared_ptr<Plan> subplan_;
+        std::vector<TabCol> group_by_cols_;
+        std::vector<SelectItem> select_exprs_;
+        std::vector<std::vector<HavingCond>> having_conds_;
+        
 };
 
 class ScanPlan : public Plan

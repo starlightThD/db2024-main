@@ -50,7 +50,7 @@ single_op ";"|"("|")"|","|"*"|"="|">"|"<"|"."
 <STATE_COMMENT>[^*] { /* ignore the text of the comment */ }
 <STATE_COMMENT>\* { /* ignore *'s that aren't part of */ }
     /* single line comment */
-"--".* { /* ignore single line comment */ }
+"--"[^\r\n]* { /* ignore single line comment */ }
     /* white space and new line */
 {white_space} { /* ignore white space */ }
 {new_line} { /* ignore new line */ }
@@ -79,11 +79,20 @@ single_op ";"|"("|")"|","|"*"|"="|">"|"<"|"."
 "FLOAT" { return FLOAT; }
 "INDEX" { return INDEX; }
 "AND" { return AND; }
-"JOIN" {return JOIN;}
+"OR" { return OR; }
+"JOIN" { return JOIN; }
+"GROUP" { return GROUP; }
+"HAVING" { return HAVING; }
+"COUNT" { return COUNT; }
+"SUM" { return SUM; }
+"AVG" { return AVG; }
+"MIN" { return MIN; }
+"MAX" { return MAX; }
 "EXIT" { return EXIT; }
 "HELP" { return HELP; }
 "ORDER" { return ORDER; }
 "BY" {  return BY;  }
+"AS" { return AS; }
 "ASC" { return ASC; }
 "ENABLE_NESTLOOP" { return ENABLE_NESTLOOP; }
 "ENABLE_SORTMERGE" { return ENABLE_SORTMERGE; }
