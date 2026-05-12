@@ -11,6 +11,9 @@ See the Mulan PSL v2 for more details. */
 #include "analyze.h"
 
 #include <map>
+#include <unordered_map>
+#include <algorithm>
+#include <functional>
 
 std::shared_ptr<Query> Analyze::do_analyze(std::shared_ptr<ast::TreeNode> parse) {
     std::shared_ptr<Query> query = std::make_shared<Query>();
@@ -37,6 +40,132 @@ std::shared_ptr<Query> Analyze::do_analyze(std::shared_ptr<ast::TreeNode> parse)
         } else {
             for (auto &sel_col : query->cols) {
                 sel_col = check_column(all_cols, sel_col);
+            }
+        }
+        get_select_items(x->select_exprs, query->select_exprs);
+        auto get_col_type = [&](const TabCol &col) -> ColType {
+            auto it = std::find_if(all_cols.begin(), all_cols.end(), [&](const ColMeta &meta) {
+                return meta.tab_name == col.tab_name && meta.name == col.col_name;
+            });
+            if (it == all_cols.end()) {
+                throw ColumnNotFoundError(col.tab_name + "." + col.col_name);
+            }
+            return it->type;
+        };
+        auto validate_agg_type = [&](const SelectItem &item, const char *clause_name) {
+            if (!item.is_agg || item.agg_type == ast::AGG_COUNT_STAR) {
+                return;
+            }
+            ColType t = get_col_type(item.col);
+            if (item.agg_type == ast::AGG_COUNT) {
+                if (!(t == TYPE_INT || t == TYPE_FLOAT || t == TYPE_STRING)) {
+                    throw RMDBError(std::string("COUNT only supports int/float/char in ") + clause_name);
+                }
+                return;
+            }
+            // According to contest requirement, MAX/MIN/SUM/AVG only support int/float fields.
+            if (!(t == TYPE_INT || t == TYPE_FLOAT)) {
+                throw RMDBError(std::string("Aggregate function only supports int/float in ") + clause_name);
+            }
+        };
+        for (auto &item : query->select_exprs) {
+            if (!item.is_agg || item.agg_type != ast::AGG_COUNT_STAR) {
+                item.col = check_column(all_cols, item.col);
+            }
+            validate_agg_type(item, "SELECT");
+        }
+        get_group_bys(x->group_bys, query->group_by_cols);
+        for (auto &group_by_col : query->group_by_cols) {
+            group_by_col = check_column(all_cols, group_by_col);
+        }
+
+        std::function<bool(const std::shared_ptr<ast::Expr> &)> contains_agg_expr =
+            [&](const std::shared_ptr<ast::Expr> &expr) -> bool {
+                if (expr == nullptr) {
+                    return false;
+                }
+                if (std::dynamic_pointer_cast<ast::AggExpr>(expr) != nullptr) {
+                    return true;
+                }
+                if (auto alias_expr = std::dynamic_pointer_cast<ast::AliasExpr>(expr)) {
+                    return contains_agg_expr(alias_expr->expr);
+                }
+                return false;
+            };
+
+        // WHERE 子句禁止使用聚合函数
+        for (const auto &cond : x->conds) {
+            if (contains_agg_expr(cond->lhs) || contains_agg_expr(cond->rhs)) {
+                throw RMDBError("Aggregate functions are not allowed in WHERE clause; use HAVING instead");
+            }
+        }
+
+        bool has_agg_select_item = std::any_of(query->select_exprs.begin(), query->select_exprs.end(),
+                                               [](const SelectItem &item) { return item.is_agg; });
+
+        // GROUP BY 存在时，SELECT 中非聚合列必须出现在 GROUP BY 中
+        if (!query->group_by_cols.empty() && x->select_exprs.empty()) {
+            // SELECT * with GROUP BY is invalid because * contains non-grouped non-aggregate columns.
+            throw RMDBError("SELECT non-aggregate column must appear in GROUP BY clause");
+        }
+        if (!query->group_by_cols.empty()) {
+            for (const auto &item : query->select_exprs) {
+                if (item.is_agg) {
+                    continue;
+                }
+                bool in_group_by = std::any_of(
+                    query->group_by_cols.begin(), query->group_by_cols.end(),
+                    [&](const TabCol &group_col) {
+                        return group_col.tab_name == item.col.tab_name && group_col.col_name == item.col.col_name;
+                    });
+                if (!in_group_by) {
+                    throw RMDBError("SELECT non-aggregate column must appear in GROUP BY clause");
+                }
+            }
+        }
+
+        // 无 GROUP BY 且有聚合时，不允许混合非聚合列
+        if (query->group_by_cols.empty() && has_agg_select_item) {
+            for (const auto &item : query->select_exprs) {
+                if (!item.is_agg) {
+                    throw RMDBError("SELECT non-aggregate column must appear in GROUP BY clause");
+                }
+            }
+        }
+
+        query->has_having = !x->having.empty();
+        if (query->has_having) {
+            get_having_clause(x->having, query->having_conds);
+            auto in_group_by = [&](const TabCol &col) -> bool {
+                return std::any_of(query->group_by_cols.begin(), query->group_by_cols.end(),
+                                   [&](const TabCol &group_col) {
+                                       return group_col.tab_name == col.tab_name && group_col.col_name == col.col_name;
+                                   });
+            };
+            for (auto &having_and_group : query->having_conds) {
+                for (auto &having_cond : having_and_group) {
+                    if (!having_cond.lhs.is_agg) {
+                        having_cond.lhs.col = check_column(all_cols, having_cond.lhs.col);
+                        if (!query->group_by_cols.empty() && !in_group_by(having_cond.lhs.col)) {
+                            throw RMDBError("HAVING non-aggregate column must appear in GROUP BY clause");
+                        }
+                    } else if (having_cond.lhs.agg_type != ast::AGG_COUNT_STAR) {
+                        // Aggregate argument column must exist, but does not need to be in GROUP BY.
+                        having_cond.lhs.col = check_column(all_cols, having_cond.lhs.col);
+                        validate_agg_type(having_cond.lhs, "HAVING");
+                    }
+                    if (!having_cond.is_rhs_val) {
+                        if (!having_cond.rhs_col_expr.is_agg) {
+                            having_cond.rhs_col_expr.col = check_column(all_cols, having_cond.rhs_col_expr.col);
+                            if (!query->group_by_cols.empty() && !in_group_by(having_cond.rhs_col_expr.col)) {
+                                throw RMDBError("HAVING non-aggregate column must appear in GROUP BY clause");
+                            }
+                        } else if (having_cond.rhs_col_expr.agg_type != ast::AGG_COUNT_STAR) {
+                            having_cond.rhs_col_expr.col = check_column(all_cols, having_cond.rhs_col_expr.col);
+                            validate_agg_type(having_cond.rhs_col_expr, "HAVING");
+                        }
+                    }
+                }
             }
         }
         get_clause(x->conds, query->conds);
@@ -117,12 +246,107 @@ void Analyze::get_all_cols(const std::vector<std::string> &tab_names, std::vecto
     }
 }
 
+SelectItem Analyze::build_select_item_from_expr(const std::shared_ptr<ast::Expr> &sv_expr, bool allow_plain_col) {
+    if (auto alias_expr = std::dynamic_pointer_cast<ast::AliasExpr>(sv_expr)) {
+        SelectItem item = build_select_item_from_expr(alias_expr->expr, allow_plain_col);
+        item.output_name = alias_expr->alias;
+        return item;
+    }
+
+    SelectItem sel_item;
+    if (auto col = std::dynamic_pointer_cast<ast::Col>(sv_expr)) {
+        if (!allow_plain_col) {
+            throw RMDBError("Only aggregate expression is allowed in this context");
+        }
+        sel_item.is_agg = false;
+        sel_item.agg_type = ast::AGG_NONE;
+        sel_item.col = {.tab_name = col->tab_name, .col_name = col->col_name};
+        sel_item.output_name = col->col_name;
+    } else if (auto agg_expr = std::dynamic_pointer_cast<ast::AggExpr>(sv_expr)) {
+        sel_item.is_agg = true;
+        sel_item.agg_type = agg_expr->agg_type;
+        std::string agg_name;
+        switch (agg_expr->agg_type) {
+            case ast::AGG_SUM: agg_name = "sum"; break;
+            case ast::AGG_COUNT: agg_name = "count"; break;
+            case ast::AGG_AVG: agg_name = "avg"; break;
+            case ast::AGG_MIN: agg_name = "min"; break;
+            case ast::AGG_MAX: agg_name = "max"; break;
+            case ast::AGG_COUNT_STAR: agg_name = "count_star"; break;
+            default: throw RMDBError("Unsupported aggregate type");
+        }
+        if (agg_expr->agg_type != ast::AGG_COUNT_STAR) {
+            auto col = agg_expr->col;
+            sel_item.col = {.tab_name = col->tab_name, .col_name = col->col_name};
+            sel_item.output_name = agg_name + "_" + col->col_name;
+        } else {
+            sel_item.output_name = agg_name;
+        }
+    } else {
+        throw RMDBError("Unsupported expression type in current execution pipeline");
+    }
+    return sel_item;
+}
+
+void Analyze::get_select_items(const std::vector<std::shared_ptr<ast::Expr>> &sv_sel_items,
+                               std::vector<SelectItem> &sel_items) {
+    sel_items.clear();
+    std::unordered_map<std::string, int> output_name_counter;
+    for (auto &sv_sel_item : sv_sel_items) {
+        SelectItem sel_item = build_select_item_from_expr(sv_sel_item, true);
+        int &dup_count = output_name_counter[sel_item.output_name];
+        if (dup_count > 0) {
+            sel_item.output_name += "_" + std::to_string(dup_count + 1);
+        }
+        dup_count++;
+        sel_items.push_back(sel_item);
+    }
+}
+
+void Analyze::get_group_bys(const std::vector<std::shared_ptr<ast::Expr>> &sv_group_bys,
+                            std::vector<TabCol> &group_by_cols) {
+    group_by_cols.clear();
+    for (auto &sv_group_by : sv_group_bys) {
+        auto col = std::dynamic_pointer_cast<ast::Col>(sv_group_by);
+        if (!col) {
+            throw RMDBError("Only column is supported in group by clause in current execution pipeline");
+        }
+        group_by_cols.push_back({.tab_name = col->tab_name, .col_name = col->col_name});
+    }
+}
+
+void Analyze::get_having_clause(const std::vector<std::vector<std::shared_ptr<ast::BinaryExpr>>> &sv_having,
+                                std::vector<std::vector<HavingCond>> &having_conds) {
+    having_conds.clear();
+    for (const auto &and_group : sv_having) {
+        std::vector<HavingCond> group_conds;
+        for (const auto &sv_cond : and_group) {
+            HavingCond cond;
+            cond.lhs = build_select_item_from_expr(sv_cond->lhs, true);
+            cond.op = convert_sv_comp_op(sv_cond->op);
+            if (auto rhs_val = std::dynamic_pointer_cast<ast::Value>(sv_cond->rhs)) {
+                cond.is_rhs_val = true;
+                cond.rhs_val = convert_sv_value(rhs_val);
+            } else {
+                cond.is_rhs_val = false;
+                cond.rhs_col_expr = build_select_item_from_expr(sv_cond->rhs, true);
+            }
+            group_conds.push_back(cond);
+        }
+        having_conds.push_back(group_conds);
+    }
+}
+
 void Analyze::get_clause(const std::vector<std::shared_ptr<ast::BinaryExpr>> &sv_conds,
                          std::vector<Condition> &conds) {
     conds.clear();
     for (auto &expr : sv_conds) {
         Condition cond;
-        cond.lhs_col = {.tab_name = expr->lhs->tab_name, .col_name = expr->lhs->col_name};
+        auto lhs_col = std::dynamic_pointer_cast<ast::Col>(expr->lhs);
+        if (!lhs_col) {
+            throw RMDBError("Only column is supported on condition lhs in current execution pipeline");
+        }
+        cond.lhs_col = {.tab_name = lhs_col->tab_name, .col_name = lhs_col->col_name};
         cond.op = convert_sv_comp_op(expr->op);
         if (auto rhs_val = std::dynamic_pointer_cast<ast::Value>(expr->rhs)) {
             cond.is_rhs_val = true;
@@ -130,6 +354,8 @@ void Analyze::get_clause(const std::vector<std::shared_ptr<ast::BinaryExpr>> &sv
         } else if (auto rhs_col = std::dynamic_pointer_cast<ast::Col>(expr->rhs)) {
             cond.is_rhs_val = false;
             cond.rhs_col = {.tab_name = rhs_col->tab_name, .col_name = rhs_col->col_name};
+        } else {
+            throw RMDBError("Only value/column is supported on condition rhs in current execution pipeline");
         }
         conds.push_back(cond);
     }

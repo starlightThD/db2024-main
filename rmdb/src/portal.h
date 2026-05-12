@@ -22,6 +22,7 @@ See the Mulan PSL v2 for more details. */
 #include "execution/executor_update.h"
 #include "execution/executor_insert.h"
 #include "execution/executor_delete.h"
+#include "execution/executor_agg.h"
 #include "execution/execution_sort.h"
 #include "common/common.h"
 
@@ -175,6 +176,9 @@ class Portal
         } else if(auto x = std::dynamic_pointer_cast<SortPlan>(plan)) {
             return std::make_unique<SortExecutor>(convert_plan_executor(x->subplan_, context), 
                                             x->sel_col_, x->is_desc_);
+        } else if (auto x = std::dynamic_pointer_cast<AggPlan>(plan)) {
+            return std::make_unique<AggExecutor>(convert_plan_executor(x->subplan_, context), x->select_exprs_,
+                                                 x->group_by_cols_, x->having_conds_);
         }
         return nullptr;
     }

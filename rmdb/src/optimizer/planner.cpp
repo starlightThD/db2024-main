@@ -10,6 +10,7 @@ See the Mulan PSL v2 for more details. */
 
 #include "planner.h"
 
+#include <algorithm>
 #include <memory>
 
 #include "execution/executor_delete.h"
@@ -297,10 +298,26 @@ std::shared_ptr<Plan> Planner::generate_select_plan(std::shared_ptr<Query> query
     query = logical_optimization(std::move(query), context);
 
     //物理优化
-    auto sel_cols = query->cols;
     std::shared_ptr<Plan> plannerRoot = physical_optimization(query, context);
-    plannerRoot = std::make_shared<ProjectionPlan>(T_Projection, std::move(plannerRoot), 
-                                                        std::move(sel_cols));
+    bool has_agg_expr = std::any_of(query->select_exprs.begin(), query->select_exprs.end(),
+                                    [](const SelectItem &item) { return item.is_agg; });
+    bool needs_agg_plan = has_agg_expr || !query->group_by_cols.empty() || query->has_having;
+    if (needs_agg_plan) {
+        plannerRoot = std::make_shared<AggPlan>(T_Agg, std::move(plannerRoot), query->select_exprs,
+                                                query->group_by_cols, query->having_conds);
+    }
+
+    // Keep ProjectionPlan as outer node for portal/executor compatibility.
+    std::vector<TabCol> sel_cols;
+    if (needs_agg_plan) {
+        sel_cols.reserve(query->select_exprs.size());
+        for (const auto &item : query->select_exprs) {
+            sel_cols.push_back(TabCol{.tab_name = "", .col_name = item.output_name});
+        }
+    } else {
+        sel_cols = query->cols;
+    }
+    plannerRoot = std::make_shared<ProjectionPlan>(T_Projection, std::move(plannerRoot), std::move(sel_cols));
 
     return plannerRoot;
 }
