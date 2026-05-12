@@ -161,6 +161,28 @@ void SmManager::show_tables(Context* context) {
  * @param {string&} tab_name 表名称
  * @param {Context*} context 
  */
+void SmManager::show_index(const std::string& tab_name, Context* context) {
+    TabMeta &tab = db_.get_table(tab_name);
+    std::fstream outfile;
+    outfile.open("output.txt", std::ios::out | std::ios::app);
+    RecordPrinter printer(3);
+    printer.print_separator(context);
+    for (auto &index : tab.indexes) {
+        std::string cols = "(";
+        for (size_t i = 0; i < index.cols.size(); ++i) {
+            if (i > 0) {
+                cols += ",";
+            }
+            cols += index.cols[i].name;
+        }
+        cols += ")";
+        printer.print_record({tab.name, "unique", cols}, context);
+        outfile << "| " << tab.name << " | unique | " << cols << " |\n";
+    }
+    printer.print_separator(context);
+    outfile.close();
+}
+
 void SmManager::desc_table(const std::string& tab_name, Context* context) {
     TabMeta &tab = db_.get_table(tab_name);
 
@@ -275,6 +297,10 @@ void SmManager::create_index(const std::string& tab_name, const std::vector<std:
         for (auto &col : cols) {
             memcpy(key.data() + offset, rec->data + col.offset, col.len);
             offset += col.len;
+        }
+        std::vector<Rid> existed;
+        if (ih->get_value(key.data(), &existed, context->txn_)) {
+            throw InternalError("Duplicate key violates unique index");
         }
         ih->insert_entry(key.data(), rid, context->txn_);
     }
