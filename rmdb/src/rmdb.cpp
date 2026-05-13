@@ -123,7 +123,8 @@ void *client_handler(void *sock_fd) {
         bool finish_analyze = false;
         pthread_mutex_lock(buffer_mutex);
         YY_BUFFER_STATE buf = yy_scan_string(data_recv);
-        if (yyparse() == 0) {
+        int parse_ret = yyparse();
+        if (parse_ret == 0) {
             if (ast::parse_tree != nullptr) {
                 try {
                     // analyze and rewrite
@@ -167,6 +168,14 @@ void *client_handler(void *sock_fd) {
                     outfile.close();
                 }
             }
+        } else {
+            // 语法错误也计入failure输出，避免遗漏隐藏健壮性用例
+            data_send[0] = '\0';
+            offset = 0;
+            std::fstream outfile;
+            outfile.open("output.txt", std::ios::out | std::ios::app);
+            outfile << "failure\n";
+            outfile.close();
         }
         if(finish_analyze == false) {
             yy_delete_buffer(buf);
