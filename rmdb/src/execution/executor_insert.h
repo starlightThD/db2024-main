@@ -52,20 +52,28 @@ class InsertExecutor : public AbstractExecutor {
             val.init_raw(col.len);
             memcpy(rec.data + col.offset, val.raw->data, col.len);
         }
-        // Insert into record file
-        rid_ = fh_->insert_record(rec.data, context_);
-        
-        // Insert into index
-        for(size_t i = 0; i < tab_.indexes.size(); ++i) {
-            auto& index = tab_.indexes[i];
+        std::vector<std::vector<char>> keys;
+        for (auto &index : tab_.indexes) {
             auto ih = sm_manager_->ihs_.at(sm_manager_->get_ix_manager()->get_index_name(tab_name_, index.cols)).get();
-            char* key = new char[index.col_tot_len];
+            std::vector<char> key(index.col_tot_len);
             int offset = 0;
-            for(size_t i = 0; i < index.col_num; ++i) {
-                memcpy(key + offset, rec.data + index.cols[i].offset, index.cols[i].len);
-                offset += index.cols[i].len;
+            for (auto &col : index.cols) {
+                memcpy(key.data() + offset, rec.data + col.offset, col.len);
+                offset += col.len;
             }
-            ih->insert_entry(key, rid_, context_->txn_);
+            std::vector<Rid> existed;
+            if (ih->get_value(key.data(), &existed, context_->txn_)) {
+                throw InternalError("Duplicate key violates unique index");
+            }
+            keys.push_back(std::move(key));
+        }
+
+        rid_ = fh_->insert_record(rec.data, context_);
+
+        for (size_t i = 0; i < tab_.indexes.size(); ++i) {
+            auto &index = tab_.indexes[i];
+            auto ih = sm_manager_->ihs_.at(sm_manager_->get_ix_manager()->get_index_name(tab_name_, index.cols)).get();
+            ih->insert_entry(keys[i].data(), rid_, context_->txn_);
         }
         return nullptr;
     }

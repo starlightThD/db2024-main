@@ -62,6 +62,12 @@ class UpdateExecutor : public AbstractExecutor {
                     memcpy(new_key.data() + offset, new_rec.data + col.offset, col.len);
                     offset += col.len;
                 }
+                if (memcmp(old_key.data(), new_key.data(), index.col_tot_len) != 0) {
+                    std::vector<Rid> existed;
+                    if (ih->get_value(new_key.data(), &existed, context_->txn_) && existed[0] != rid) {
+                        throw InternalError("Duplicate key violates unique index");
+                    }
+                }
                 ih->delete_entry(old_key.data(), context_->txn_);
                 ih->insert_entry(new_key.data(), rid, context_->txn_);
             }

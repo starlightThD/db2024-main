@@ -68,6 +68,7 @@
 
 /* First part of user prologue.  */
 #line 1 "yacc.y"
+#line 1 "yacc.y"
 
 #include "ast.h"
 #include "yacc.tab.h"
@@ -82,6 +83,7 @@ void yyerror(YYLTYPE *locp, const char* s) {
 
 using namespace ast;
 
+#line 86 "yacc.tab.cpp"
 #line 86 "yacc.tab.cpp"
 
 # ifndef YY_CAST
@@ -326,6 +328,7 @@ typedef int yytype_uint16;
 
 
 /* Stored state numbers (used for stacks). */
+typedef yytype_uint8 yy_state_t;
 typedef yytype_uint8 yy_state_t;
 
 /* State numbers in computations.  */
@@ -723,6 +726,7 @@ static const yytype_int8 yypgoto[] =
 
 /* YYDEFGOTO[NTERM-NUM].  */
 static const yytype_uint8 yydefgoto[] =
+static const yytype_uint8 yydefgoto[] =
 {
        0,    17,    18,    19,    20,    21,    22,    23,    97,   100,
      156,    98,   124,   128,    48,   158,    80,   143,   153,   159,
@@ -733,6 +737,7 @@ static const yytype_uint8 yydefgoto[] =
 /* YYTABLE[YYPACT[STATE-NUM]] -- What to do in state STATE-NUM.  If
    positive, shift that token.  If negative, reduce the rule whose
    number is the opposite.  If YYTABLE_NINF, syntax error.  */
+static const yytype_int16 yytable[] =
 static const yytype_int16 yytable[] =
 {
       52,    30,   104,    79,    33,    87,    88,    89,    90,    91,
@@ -754,6 +759,7 @@ static const yytype_int16 yytable[] =
      169,   102,     0,     0,   138
 };
 
+static const yytype_int16 yycheck[] =
 static const yytype_int16 yycheck[] =
 {
        9,     4,    79,    18,     7,    66,    67,    68,    69,    70,
