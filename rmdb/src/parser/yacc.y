@@ -47,7 +47,7 @@ WHERE UPDATE SET SELECT INT CHAR FLOAT INDEX AND OR JOIN EXIT HELP TXN_BEGIN TXN
 %type <sv_col> col
 %type <sv_expr> selectItem
 %type <sv_exprs> selectList selector
-%type <sv_exprs> column_list
+%type <sv_exprs> columnList
 %type <sv_set_clause> setClause
 %type <sv_set_clauses> setClauses
 %type <sv_cond> condition
@@ -56,9 +56,9 @@ WHERE UPDATE SET SELECT INT CHAR FLOAT INDEX AND OR JOIN EXIT HELP TXN_BEGIN TXN
 %type <sv_having_or> optHavingClause
 %type <sv_having_and> havingAndClause
 %type <sv_having_or> havingOrClause
-%type <sv_orderby>  order_clause opt_order_clause
-%type <sv_orderby_dir> opt_asc_desc
-%type <sv_setKnobType> set_knob_type
+%type <sv_orderby> orderByClause optOrderByClause
+%type <sv_orderby_dir> optAscDesc
+%type <sv_setKnobType> setKnobType
 
 %%
 start:
@@ -123,7 +123,7 @@ dbStmt:
     ;
 
 setStmt:
-        SET set_knob_type '=' VALUE_BOOL
+        SET setKnobType '=' VALUE_BOOL
     {
         $$ = std::make_shared<SetStmt>($2, $4);
     }
@@ -165,7 +165,7 @@ dml:
     {
         $$ = std::make_shared<UpdateStmt>($2, $4, $5);
     }
-    |   SELECT selector FROM tableList optWhereClause optGroupByClause optHavingClause opt_order_clause
+    |   SELECT selector FROM tableList optWhereClause optGroupByClause optHavingClause optOrderByClause
     {
         $$ = std::make_shared<SelectStmt>($2, $4, $5, $6, $7, $8);
     }
@@ -192,12 +192,12 @@ colNameList:
         $$.push_back($3);
     }
     ;
-column_list:
+columnList:
     col
     {
         $$ = std::vector<std::shared_ptr<Expr>>{$1};
     }
-    | column_list ',' col
+    | columnList ',' col
     {
         $$ = $1;
         $$.push_back($3);
@@ -268,7 +268,7 @@ optWhereClause:
     ;
 optGroupByClause:
     /* empty */   { $$ = std::vector<std::shared_ptr<Expr>>{}; }
-    | GROUP BY column_list   { $$ = $3; }
+    | GROUP BY columnList   { $$ = $3; }
     ;
 
 optHavingClause:
@@ -409,28 +409,28 @@ tableList:
     }
     ;
 
-opt_order_clause:
-    ORDER BY order_clause      
+optOrderByClause:
+    ORDER BY orderByClause
     { 
         $$ = $3; 
     }
     |   /* epsilon */ { /* ignore*/ }
     ;
 
-order_clause:
-      col  opt_asc_desc 
+orderByClause:
+      col  optAscDesc
     { 
         $$ = std::make_shared<OrderBy>($1, $2);
     }
     ;   
 
-opt_asc_desc:
+optAscDesc:
     ASC          { $$ = OrderBy_ASC;     }
     |  DESC      { $$ = OrderBy_DESC;    }
-    |       { $$ = OrderBy_DEFAULT; }
+    |       { $$ = OrderBy_ASC; }
     ;    
 
-set_knob_type:
+setKnobType:
     ENABLE_NESTLOOP { $$ = EnableNestLoop; }
     |   ENABLE_SORTMERGE { $$ = EnableSortMerge; }
     ;

@@ -1,6 +1,6 @@
-#line 2 "lex.yy.cpp"
+#line 2 "/home/thd/CS/Project/db2024-main/rmdb/src/parser/lex.yy.cpp"
 
-#line 4 "lex.yy.cpp"
+#line 4 "/home/thd/CS/Project/db2024-main/rmdb/src/parser/lex.yy.cpp"
 
 #define  YY_INT_ALIGNED short int
 
@@ -663,9 +663,9 @@ char *yytext;
         } \
     }
 
-#line 667 "lex.yy.cpp"
+#line 667 "/home/thd/CS/Project/db2024-main/rmdb/src/parser/lex.yy.cpp"
 
-#line 669 "lex.yy.cpp"
+#line 669 "/home/thd/CS/Project/db2024-main/rmdb/src/parser/lex.yy.cpp"
 
 #define INITIAL 0
 #define STATE_COMMENT 1
@@ -903,7 +903,7 @@ YY_DECL
 
 #line 48 "lex.l"
     /* block comment */
-#line 907 "lex.yy.cpp"
+#line 907 "/home/thd/CS/Project/db2024-main/rmdb/src/parser/lex.yy.cpp"
 
 	while ( /*CONSTCOND*/1 )		/* loops until end-of-file is reached */
 		{
@@ -1294,7 +1294,7 @@ YY_RULE_SETUP
 #line 135 "lex.l"
 ECHO;
 	YY_BREAK
-#line 1298 "lex.yy.cpp"
+#line 1298 "/home/thd/CS/Project/db2024-main/rmdb/src/parser/lex.yy.cpp"
 
 	case YY_END_OF_BUFFER:
 		{

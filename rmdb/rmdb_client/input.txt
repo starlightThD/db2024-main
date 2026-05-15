@@ -12,10 +12,8 @@ insert into grade values('ComputerNetworks',2,88.5);
 
 insert into grade values('ComputerNetworks',3,92.5);
 
--- SELECT 列表中不能出现没有在 GROUP BY 子句中的非聚集列
+select * from grade order by score;
 
-select id , score from grade group by course;
+select score as s from grade;
 
--- WHERE 子句中不能用聚集函数作为条件表达式
-
-select id, MAX(score) as max_score from grade where MAX(score) > 90 group by id;
+select score as s from grade order by s DESC;

@@ -126,15 +126,17 @@ class JoinPlan : public Plan
 class ProjectionPlan : public Plan
 {
     public:
-        ProjectionPlan(PlanTag tag, std::shared_ptr<Plan> subplan, std::vector<TabCol> sel_cols)
+        ProjectionPlan(PlanTag tag, std::shared_ptr<Plan> subplan, std::vector<TabCol> in_cols, std::vector<TabCol> out_cols)
         {
             Plan::tag = tag;
             subplan_ = std::move(subplan);
-            sel_cols_ = std::move(sel_cols);
+            in_cols_ = std::move(in_cols);
+            out_cols_ = std::move(out_cols);
         }
         ~ProjectionPlan(){}
         std::shared_ptr<Plan> subplan_;
-        std::vector<TabCol> sel_cols_;
+        std::vector<TabCol> in_cols_;
+        std::vector<TabCol> out_cols_;
         
 };
 

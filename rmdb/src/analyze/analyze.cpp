@@ -25,23 +25,8 @@ std::shared_ptr<Query> Analyze::do_analyze(std::shared_ptr<ast::TreeNode> parse)
             }
         }
 
-        for (auto &sv_sel_col : x->cols) {
-            TabCol sel_col = {.tab_name = sv_sel_col->tab_name, .col_name = sv_sel_col->col_name};
-            query->cols.push_back(sel_col);
-        }
-
         std::vector<ColMeta> all_cols;
         get_all_cols(query->tables, all_cols);
-        if (query->cols.empty()) {
-            for (auto &col : all_cols) {
-                TabCol sel_col = {.tab_name = col.tab_name, .col_name = col.name};
-                query->cols.push_back(sel_col);
-            }
-        } else {
-            for (auto &sel_col : query->cols) {
-                sel_col = check_column(all_cols, sel_col);
-            }
-        }
         get_select_items(x->select_exprs, query->select_exprs);
         auto get_col_type = [&](const TabCol &col) -> ColType {
             auto it = std::find_if(all_cols.begin(), all_cols.end(), [&](const ColMeta &meta) {
@@ -73,6 +58,19 @@ std::shared_ptr<Query> Analyze::do_analyze(std::shared_ptr<ast::TreeNode> parse)
                 item.col = check_column(all_cols, item.col);
             }
             validate_agg_type(item, "SELECT");
+        }
+
+        query->cols.clear();
+        if (x->select_exprs.empty()) {
+            for (auto &col : all_cols) {
+                query->cols.push_back(TabCol{.tab_name = col.tab_name, .col_name = col.name});
+            }
+        } else {
+            for (const auto &item : query->select_exprs) {
+                if (!item.is_agg) {
+                    query->cols.push_back(item.col);
+                }
+            }
         }
         get_group_bys(x->group_bys, query->group_by_cols);
         for (auto &group_by_col : query->group_by_cols) {

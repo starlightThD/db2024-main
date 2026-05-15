@@ -309,11 +309,46 @@ std::shared_ptr<Plan> Planner::generate_sort_plan(std::shared_ptr<Query> query, 
         const auto &sel_tab_cols = sm_manager_->db_.get_table(sel_tab_name).cols;
         all_cols.insert(all_cols.end(), sel_tab_cols.begin(), sel_tab_cols.end());
     }
-    TabCol sel_col;
-    for (auto &col : all_cols) {
-        if(col.name.compare(x->order->cols->col_name) == 0 )
-        sel_col = {.tab_name = col.tab_name, .col_name = col.name};
+
+    TabCol sel_col = {.tab_name = x->order->cols->tab_name, .col_name = x->order->cols->col_name};
+    if (sel_col.tab_name.empty()) {
+        std::string matched_tab;
+        for (const auto &col : all_cols) {
+            if (col.name == sel_col.col_name) {
+                if (!matched_tab.empty() && matched_tab != col.tab_name) {
+                    throw AmbiguousColumnError(sel_col.col_name);
+                }
+                matched_tab = col.tab_name;
+            }
+        }
+        if (matched_tab.empty()) {
+            bool matched_alias = false;
+            for (const auto &item : query->select_exprs) {
+                if (!item.is_agg && item.output_name == sel_col.col_name) {
+                    sel_col = item.col;
+                    matched_alias = true;
+                    break;
+                }
+            }
+            if (!matched_alias) {
+                throw ColumnNotFoundError(sel_col.col_name);
+            }
+        } else {
+            sel_col.tab_name = matched_tab;
+        }
+    } else {
+        bool found = false;
+        for (const auto &col : all_cols) {
+            if (col.tab_name == sel_col.tab_name && col.name == sel_col.col_name) {
+                found = true;
+                break;
+            }
+        }
+        if (!found) {
+            throw ColumnNotFoundError(sel_col.tab_name + "." + sel_col.col_name);
+        }
     }
+
     return std::make_shared<SortPlan>(T_Sort, std::move(plan), sel_col, 
                                     x->order->orderby_dir == ast::OrderBy_DESC);
 }
@@ -341,16 +376,31 @@ std::shared_ptr<Plan> Planner::generate_select_plan(std::shared_ptr<Query> query
     }
 
     // Keep ProjectionPlan as outer node for portal/executor compatibility.
-    std::vector<TabCol> sel_cols;
+    std::vector<TabCol> proj_in_cols;
+    std::vector<TabCol> proj_out_cols;
     if (needs_agg_plan) {
-        sel_cols.reserve(query->select_exprs.size());
+        proj_in_cols.reserve(query->select_exprs.size());
+        proj_out_cols.reserve(query->select_exprs.size());
         for (const auto &item : query->select_exprs) {
-            sel_cols.push_back(TabCol{.tab_name = "", .col_name = item.output_name});
+            TabCol out_col{.tab_name = "", .col_name = item.output_name};
+            proj_in_cols.push_back(out_col);
+            proj_out_cols.push_back(std::move(out_col));
         }
     } else {
-        sel_cols = query->cols;
+        proj_in_cols = query->cols;
+        if (query->select_exprs.empty()) {
+            proj_out_cols = query->cols;
+        } else {
+            proj_out_cols.reserve(query->select_exprs.size());
+            for (const auto &item : query->select_exprs) {
+                if (!item.is_agg) {
+                    proj_out_cols.push_back(TabCol{.tab_name = "", .col_name = item.output_name});
+                }
+            }
+        }
     }
-    plannerRoot = std::make_shared<ProjectionPlan>(T_Projection, std::move(plannerRoot), std::move(sel_cols));
+    plannerRoot = std::make_shared<ProjectionPlan>(T_Projection, std::move(plannerRoot),
+                                                   std::move(proj_in_cols), std::move(proj_out_cols));
 
     return plannerRoot;
 }
