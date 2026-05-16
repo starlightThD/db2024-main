@@ -20,6 +20,8 @@ See the Mulan PSL v2 for more details. */
 #include "execution/executor_projection.h"
 #include "execution/executor_seq_scan.h"
 #include "execution/executor_update.h"
+#include "execution/executor_agg.h"
+#include "execution/execution_sort.h"
 #include "index/ix.h"
 #include "record_printer.h"
 
@@ -82,7 +84,10 @@ std::vector<Condition> pop_conds(std::vector<Condition> &conds, std::string tab_
     std::vector<Condition> solved_conds;
     auto it = conds.begin();
     while (it != conds.end()) {
-        if ((tab_names.compare(it->lhs_col.tab_name) == 0 && it->is_rhs_val) || (it->lhs_col.tab_name.compare(it->rhs_col.tab_name) == 0)) {
+        if ((it->is_lhs_val && (it->is_rhs_val || it->is_rhs_set || it->is_rhs_null)) ||
+            (tab_names.compare(it->lhs_col.tab_name) == 0 &&
+             (it->is_rhs_val || it->is_rhs_set || it->is_rhs_null)) ||
+            (!it->is_rhs_val && !it->is_rhs_set && it->lhs_col.tab_name.compare(it->rhs_col.tab_name) == 0)) {
             solved_conds.emplace_back(std::move(*it));
             it = conds.erase(it);
         } else {
@@ -327,6 +332,7 @@ std::shared_ptr<Plan> Planner::generate_sort_plan(std::shared_ptr<Query> query, 
  * @param conds select plan 选取条件
  */
 std::shared_ptr<Plan> Planner::generate_select_plan(std::shared_ptr<Query> query, Context *context) {
+    materialize_subqueries(query, context);
     //逻辑优化
     query = logical_optimization(std::move(query), context);
 
@@ -342,15 +348,25 @@ std::shared_ptr<Plan> Planner::generate_select_plan(std::shared_ptr<Query> query
 
     // Keep ProjectionPlan as outer node for portal/executor compatibility.
     std::vector<TabCol> sel_cols;
+    std::vector<std::string> output_names;
     if (needs_agg_plan) {
         sel_cols.reserve(query->select_exprs.size());
+        output_names.reserve(query->select_exprs.size());
         for (const auto &item : query->select_exprs) {
             sel_cols.push_back(TabCol{.tab_name = "", .col_name = item.output_name});
+            output_names.push_back(item.output_name);
         }
     } else {
         sel_cols = query->cols;
+        if (!query->select_exprs.empty()) {
+            output_names.reserve(query->select_exprs.size());
+            for (const auto &item : query->select_exprs) {
+                output_names.push_back(item.output_name);
+            }
+        }
     }
-    plannerRoot = std::make_shared<ProjectionPlan>(T_Projection, std::move(plannerRoot), std::move(sel_cols));
+    plannerRoot = std::make_shared<ProjectionPlan>(T_Projection, std::move(plannerRoot), std::move(sel_cols),
+                                                   std::move(output_names));
 
     return plannerRoot;
 }
@@ -358,6 +374,7 @@ std::shared_ptr<Plan> Planner::generate_select_plan(std::shared_ptr<Query> query
 // 生成DDL语句和DML语句的查询执行计划
 std::shared_ptr<Plan> Planner::do_planner(std::shared_ptr<Query> query, Context *context)
 {
+    materialize_subqueries(query, context);
     std::shared_ptr<Plan> plannerRoot;
     if (auto x = std::dynamic_pointer_cast<ast::CreateTable>(query->parse)) {
         // create table;
@@ -437,4 +454,122 @@ std::shared_ptr<Plan> Planner::do_planner(std::shared_ptr<Query> query, Context 
         throw InternalError("Unexpected AST root");
     }
     return plannerRoot;
+}
+
+Value Planner::value_from_record(const RmRecord &record, const ColMeta &col) {
+    Value value;
+    const char *data = record.data + col.offset;
+    if (col.type == TYPE_INT) {
+        value.set_int(*reinterpret_cast<const int *>(data));
+    } else if (col.type == TYPE_FLOAT) {
+        value.set_float(*reinterpret_cast<const float *>(data));
+    } else if (col.type == TYPE_STRING) {
+        std::string str(data, col.len);
+        str.resize(strlen(str.c_str()));
+        value.set_str(str);
+    } else {
+        throw RMDBError("Unsupported subquery result type");
+    }
+    return value;
+}
+
+std::unique_ptr<AbstractExecutor> Planner::build_executor(std::shared_ptr<Plan> plan, Context *context) {
+    if (auto x = std::dynamic_pointer_cast<ProjectionPlan>(plan)) {
+        return std::make_unique<ProjectionExecutor>(build_executor(x->subplan_, context), x->sel_cols_,
+                                                    x->output_names_);
+    }
+    if (auto x = std::dynamic_pointer_cast<ScanPlan>(plan)) {
+        if (x->tag == T_SeqScan) {
+            return std::make_unique<SeqScanExecutor>(sm_manager_, x->tab_name_, x->conds_, context);
+        }
+        return std::make_unique<IndexScanExecutor>(sm_manager_, x->tab_name_, x->conds_, x->index_col_names_, context);
+    }
+    if (auto x = std::dynamic_pointer_cast<JoinPlan>(plan)) {
+        return std::make_unique<NestedLoopJoinExecutor>(build_executor(x->left_, context),
+                                                        build_executor(x->right_, context), x->conds_);
+    }
+    if (auto x = std::dynamic_pointer_cast<SortPlan>(plan)) {
+        return std::make_unique<SortExecutor>(build_executor(x->subplan_, context), x->sel_col_, x->is_desc_);
+    }
+    if (auto x = std::dynamic_pointer_cast<AggPlan>(plan)) {
+        return std::make_unique<AggExecutor>(build_executor(x->subplan_, context), x->select_exprs_,
+                                             x->group_by_cols_, x->having_conds_);
+    }
+    throw InternalError("Unexpected plan type while executing subquery");
+}
+
+void Planner::materialize_subqueries(std::shared_ptr<Query> query, Context *context) {
+    for (auto &cond : query->conds) {
+        if (!cond.is_rhs_subquery) {
+            continue;
+        }
+
+        materialize_subqueries(cond.rhs_query, context);
+        auto subplan = generate_select_plan(cond.rhs_query, context);
+        auto executor = build_executor(subplan, context);
+        const auto &cols = executor->cols();
+        if (cols.size() != 1) {
+            throw RMDBError("Subquery must return exactly one column");
+        }
+
+        ColType lhs_type;
+        int value_len = cols[0].len;
+        if (cond.is_lhs_val) {
+            lhs_type = cond.lhs_val.type;
+            if (lhs_type != TYPE_STRING) {
+                cond.lhs_val.init_raw(value_len);
+            }
+        } else {
+            TabMeta &lhs_tab = sm_manager_->db_.get_table(cond.lhs_col.tab_name);
+            auto lhs_col = lhs_tab.get_col(cond.lhs_col.col_name);
+            lhs_type = lhs_col->type;
+            value_len = lhs_col->len;
+        }
+        bool comparable_type = cols[0].type == lhs_type ||
+                               ((cols[0].type == TYPE_INT || cols[0].type == TYPE_FLOAT) &&
+                                (lhs_type == TYPE_INT || lhs_type == TYPE_FLOAT));
+        if (!comparable_type) {
+            throw IncompatibleTypeError(coltype2str(lhs_type), coltype2str(cols[0].type));
+        }
+
+        std::vector<Value> values;
+        executor->beginTuple();
+        for (; !executor->is_end(); executor->nextTuple()) {
+            auto record = executor->Next();
+            if (record != nullptr) {
+                values.push_back(value_from_record(*record, cols[0]));
+            }
+        }
+
+        for (auto &value : values) {
+            bool value_comparable = value.type == lhs_type ||
+                                    ((value.type == TYPE_INT || value.type == TYPE_FLOAT) &&
+                                     (lhs_type == TYPE_INT || lhs_type == TYPE_FLOAT));
+            if (!value_comparable) {
+                throw IncompatibleTypeError(coltype2str(lhs_type), coltype2str(value.type));
+            }
+            if (lhs_type == TYPE_FLOAT && value.type == TYPE_INT) {
+                value.set_float(static_cast<float>(value.int_val));
+            }
+            if (value.type == lhs_type && value.type != TYPE_STRING) {
+                value.init_raw(value_len);
+            }
+        }
+
+        if (cond.op == OP_IN) {
+            cond.is_rhs_set = true;
+            cond.rhs_vals = std::move(values);
+        } else {
+            if (values.empty()) {
+                cond.is_rhs_null = true;
+            } else if (values.size() != 1) {
+                throw RMDBError("Scalar subquery must return exactly one row");
+            } else {
+                cond.is_rhs_val = true;
+                cond.rhs_val = std::move(values.front());
+            }
+        }
+        cond.is_rhs_subquery = false;
+        cond.rhs_query.reset();
+    }
 }

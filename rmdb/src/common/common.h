@@ -18,6 +18,7 @@ See the Mulan PSL v2 for more details. */
 #include "defs.h"
 #include "record/rm_defs.h"
 
+class Query;
 
 struct TabCol {
     std::string tab_name;
@@ -72,14 +73,21 @@ struct Value {
     }
 };
 
-enum CompOp { OP_EQ, OP_NE, OP_LT, OP_GT, OP_LE, OP_GE };
+enum CompOp { OP_EQ, OP_NE, OP_LT, OP_GT, OP_LE, OP_GE, OP_IN };
 
 struct Condition {
     TabCol lhs_col;   // left-hand side column
     CompOp op;        // comparison operator
+    bool is_lhs_val{false};
+    Value lhs_val;
     bool is_rhs_val;  // true if right-hand side is a value (not a column)
+    bool is_rhs_set{false};
+    bool is_rhs_subquery{false};
+    bool is_rhs_null{false};
     TabCol rhs_col;   // right-hand side column
     Value rhs_val;    // right-hand side value
+    std::vector<Value> rhs_vals;
+    std::shared_ptr<Query> rhs_query;
 };
 
 struct SetClause {

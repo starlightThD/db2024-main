@@ -40,7 +40,7 @@ const char *help_info = "Supported SQL syntax:\n"
                    "column:\n"
                    "  [table_name.]column_name\n"
                    "op:\n"
-                   "  {= | <> | < | > | <= | >=}\n"
+                   "  {= | <> | != | < | > | <= | >=}\n"
                    "selector:\n"
                    "  {* | column [, column ...]}\n";
 
@@ -152,13 +152,13 @@ void QlManager::run_cmd_utility(std::shared_ptr<Plan> plan, txn_id_t *txn_id, Co
 void QlManager::select_from(std::unique_ptr<AbstractExecutor> executorTreeRoot, std::vector<TabCol> sel_cols, 
                             Context *context) {
     std::vector<std::string> captions;
-    captions.reserve(sel_cols.size());
-    for (auto &sel_col : sel_cols) {
-        captions.push_back(sel_col.col_name);
+    captions.reserve(executorTreeRoot->cols().size());
+    for (const auto &col : executorTreeRoot->cols()) {
+        captions.push_back(col.name);
     }
 
     // Print header into buffer
-    RecordPrinter rec_printer(sel_cols.size());
+    RecordPrinter rec_printer(captions.size());
     rec_printer.print_separator(context);
     rec_printer.print_record(captions, context);
     rec_printer.print_separator(context);

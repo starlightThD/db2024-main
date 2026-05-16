@@ -23,7 +23,7 @@ enum SvType {
 };
 
 enum SvCompOp {
-    SV_OP_EQ, SV_OP_NE, SV_OP_LT, SV_OP_GT, SV_OP_LE, SV_OP_GE
+    SV_OP_EQ, SV_OP_NE, SV_OP_LT, SV_OP_GT, SV_OP_LE, SV_OP_GE, SV_OP_IN
 };
 
 enum OrderByDir {
@@ -122,6 +122,8 @@ struct DropIndex : public TreeNode {
 struct Expr : public TreeNode {
 };
 
+struct SelectStmt;
+
 struct Value : public Expr {
 };
 
@@ -147,6 +149,12 @@ struct BoolLit : public Value {
     bool val;
 
     BoolLit(bool val_) : val(val_) {}
+};
+
+struct ValueList : public Expr {
+    std::vector<std::shared_ptr<Value>> vals;
+
+    ValueList(std::vector<std::shared_ptr<Value>> vals_) : vals(std::move(vals_)) {}
 };
 
 struct Col : public Expr {
@@ -181,6 +189,12 @@ struct AliasExpr : public Expr {
 
     AliasExpr(std::shared_ptr<Expr> expr_, std::string alias_) :
             expr(std::move(expr_)), alias(std::move(alias_)) {}
+};
+
+struct SubqueryExpr : public Expr {
+    std::shared_ptr<SelectStmt> query;
+
+    SubqueryExpr(std::shared_ptr<SelectStmt> query_) : query(std::move(query_)) {}
 };
 
 struct SetClause : public TreeNode {
@@ -276,7 +290,11 @@ struct SelectStmt : public TreeNode {
             order(std::move(order_)) {
                 for (auto &expr : select_exprs) {
                     if (auto col = std::dynamic_pointer_cast<Col>(expr)) {
-                        cols.push_back(std::move(col));
+                        cols.push_back(col);
+                    } else if (auto alias_expr = std::dynamic_pointer_cast<AliasExpr>(expr)) {
+                        if (auto col = std::dynamic_pointer_cast<Col>(alias_expr->expr)) {
+                            cols.push_back(col);
+                        }
                     }
                 }
                 has_sort = (bool)order;
@@ -302,6 +320,7 @@ struct SemValue {
     std::vector<std::string> sv_strs;
 
     std::shared_ptr<TreeNode> sv_node;
+    std::shared_ptr<SelectStmt> sv_select_stmt;
 
     SvCompOp sv_comp_op;
 

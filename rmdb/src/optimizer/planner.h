@@ -18,6 +18,7 @@ See the Mulan PSL v2 for more details. */
 
 #include "execution/execution_defs.h"
 #include "execution/execution_manager.h"
+#include "execution/executor_abstract.h"
 #include "record/rm.h"
 #include "system/sm.h"
 #include "common/context.h"
@@ -51,6 +52,9 @@ class Planner {
     std::shared_ptr<Plan> generate_sort_plan(std::shared_ptr<Query> query, std::shared_ptr<Plan> plan);
     
     std::shared_ptr<Plan> generate_select_plan(std::shared_ptr<Query> query, Context *context);
+    void materialize_subqueries(std::shared_ptr<Query> query, Context *context);
+    std::unique_ptr<AbstractExecutor> build_executor(std::shared_ptr<Plan> plan, Context *context);
+    Value value_from_record(const RmRecord &record, const ColMeta &col);
 
 
     // int get_indexNo(std::string tab_name, std::vector<Condition> curr_conds);
