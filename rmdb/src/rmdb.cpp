@@ -302,6 +302,10 @@ int main(int argc, char **argv) {
         {
             std::ofstream ofs("output.txt", std::ios::out | std::ios::trunc);
         }
+        // Sort-merge join intermediate check file.
+        {
+            std::ofstream ofs("sorted_results.txt", std::ios::out | std::ios::trunc);
+        }
 
         // recovery database
         recovery->analyze();

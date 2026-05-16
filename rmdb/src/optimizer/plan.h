@@ -119,6 +119,8 @@ class JoinPlan : public Plan
         std::shared_ptr<Plan> right_;
         // 连接条件
         std::vector<Condition> conds_;
+        // FROM 子句表顺序，用于中间结果按题目要求稳定输出
+        std::vector<std::string> query_table_order_;
         // future TODO: 后续可以支持的连接类型
         JoinType type;
 };

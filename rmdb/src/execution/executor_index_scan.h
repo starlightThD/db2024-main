@@ -26,8 +26,7 @@ class IndexScanExecutor : public AbstractExecutor {
 
     Rid rid_;
     std::unique_ptr<IxScan> scan_;
-    std::vector<Rid> matched_rids_;
-    size_t rid_pos_{0};
+    bool is_end_{true};
     SmManager *sm_manager_;
 
     static void fill_min(char *dest, const ColMeta &col) {
@@ -137,23 +136,26 @@ class IndexScanExecutor : public AbstractExecutor {
         upper = use_upper_bound ? ih_->upper_bound(high_key.data()) : ih_->lower_bound(high_key.data());
     }
 
-    void collect_matches() {
-        matched_rids_.clear();
+    void advance_to_next_match() {
+        is_end_ = true;
         while (scan_ != nullptr && !scan_->is_end()) {
             Rid candidate = scan_->rid();
+            if (conds_.empty()) {
+                rid_ = candidate;
+                is_end_ = false;
+                return;
+            }
             try {
                 auto rec = fh_->get_record(candidate, context_);
                 if (eval_conds(cols_, rec.get(), conds_)) {
-                    matched_rids_.push_back(candidate);
+                    rid_ = candidate;
+                    is_end_ = false;
+                    return;
                 }
             } catch (const RecordNotFoundError &) {
             } catch (const PageNotExistError &) {
             }
             scan_->next();
-        }
-        rid_pos_ = 0;
-        if (!matched_rids_.empty()) {
-            rid_ = matched_rids_[0];
         }
     }
 
@@ -178,16 +180,15 @@ class IndexScanExecutor : public AbstractExecutor {
         Iid upper;
         make_scan_range(lower, upper);
         scan_ = std::make_unique<IxScan>(ih_, lower, upper, sm_manager_->get_bpm());
-        collect_matches();
+        advance_to_next_match();
     }
 
     void nextTuple() override {
-        if (rid_pos_ < matched_rids_.size()) {
-            ++rid_pos_;
+        if (is_end_) {
+            return;
         }
-        if (rid_pos_ < matched_rids_.size()) {
-            rid_ = matched_rids_[rid_pos_];
-        }
+        scan_->next();
+        advance_to_next_match();
     }
 
     std::unique_ptr<RmRecord> Next() override {
@@ -199,7 +200,7 @@ class IndexScanExecutor : public AbstractExecutor {
 
     Rid &rid() override { return rid_; }
 
-    bool is_end() const override { return rid_pos_ >= matched_rids_.size(); }
+    bool is_end() const override { return is_end_; }
 
     size_t tupleLen() const override { return len_; }
 

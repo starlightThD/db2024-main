@@ -23,6 +23,14 @@ See the Mulan PSL v2 for more details. */
 class RecordPrinter {
     static constexpr size_t COL_WIDTH = 16;
     size_t num_cols;
+    static void append_to_context(Context *context, const std::string &str) {
+        if (context->ellipsis_ == false && *context->offset_ + RECORD_COUNT_LENGTH + str.length() < BUFFER_LENGTH) {
+            memcpy(context->data_send_ + *(context->offset_), str.c_str(), str.length());
+            *(context->offset_) = *(context->offset_) + str.length();
+        } else {
+            context->ellipsis_ = true;
+        }
+    }
 public:
     RecordPrinter(size_t num_cols_) : num_cols(num_cols_) {
         assert(num_cols_ > 0);
@@ -30,49 +38,31 @@ public:
 
     void print_separator(Context *context) const {
         for (size_t i = 0; i < num_cols; i++) {
-            // std::cout << '+' << std::string(COL_WIDTH + 2, '-');
             std::string str = "+" + std::string(COL_WIDTH + 2, '-');
-            if(context->ellipsis_ == false && *context->offset_ + RECORD_COUNT_LENGTH + str.length() < BUFFER_LENGTH) {
-                memcpy(context->data_send_ + *(context->offset_), str.c_str(), str.length());
-                *(context->offset_) = *(context->offset_) + str.length();
-            }
-            else {
-                context->ellipsis_ = true;
-            }
+            append_to_context(context, str);
         }
-        std::string str = "+\n";
-        if(context->ellipsis_ == false && *context->offset_ + RECORD_COUNT_LENGTH + str.length() < BUFFER_LENGTH) {
-            memcpy(context->data_send_ + *(context->offset_), str.c_str(), str.length());
-            *(context->offset_) = *(context->offset_) + str.length();
-        }
-        else {
-            context->ellipsis_ = true;
-        }
+        append_to_context(context, "+\n");
     }
 
     void print_record(const std::vector<std::string> &rec_str, Context *context) const {
         assert(rec_str.size() == num_cols);
-        for (auto col: rec_str) {
+        std::string buf;
+        buf.reserve(num_cols * (COL_WIDTH + 4) + 2);
+        for (const auto &col_ref : rec_str) {
+            std::string col = col_ref;
             if (col.size() > COL_WIDTH) {
-                col = col.substr(0, COL_WIDTH - 3) + "...";
+                col.resize(COL_WIDTH - 3);
+                col += "...";
             }
-            // std::cout << "| " << std::setw(COL_WIDTH) << col << ' ';
-            std::stringstream ss;
-            ss << "| " << std::setw(COL_WIDTH) << col << " ";
-            if(context->ellipsis_ == false && *context->offset_ + RECORD_COUNT_LENGTH + ss.str().length() < BUFFER_LENGTH) {
-                memcpy(context->data_send_ + *(context->offset_), ss.str().c_str(), ss.str().length());
-                *(context->offset_) = *(context->offset_) + ss.str().length();
+            buf += "| ";
+            if (col.size() < COL_WIDTH) {
+                buf.append(COL_WIDTH - col.size(), ' ');
             }
-            else {
-                context->ellipsis_ = true;
-            }
+            buf += col;
+            buf += " ";
         }
-        // std::cout << "|\n";
-        std::string str = "|\n";
-        if(context->ellipsis_ == false && *context->offset_ + RECORD_COUNT_LENGTH + str.length() < BUFFER_LENGTH) {
-            memcpy(context->data_send_ + *(context->offset_), str.c_str(), str.length());
-            *(context->offset_) = *(context->offset_) + str.length();
-        }
+        buf += "|\n";
+        append_to_context(context, buf);
     }
 
     static void print_record_count(size_t num_rec, Context *context) {

@@ -22,6 +22,7 @@ See the Mulan PSL v2 for more details. */
 #include "execution/executor_update.h"
 #include "execution/executor_insert.h"
 #include "execution/executor_delete.h"
+#include "execution/executor_sortmerge_join.h"
 #include "execution/executor_agg.h"
 #include "execution/execution_sort.h"
 #include "common/common.h"
@@ -169,10 +170,19 @@ class Portal
         } else if(auto x = std::dynamic_pointer_cast<JoinPlan>(plan)) {
             std::unique_ptr<AbstractExecutor> left = convert_plan_executor(x->left_, context);
             std::unique_ptr<AbstractExecutor> right = convert_plan_executor(x->right_, context);
-            std::unique_ptr<AbstractExecutor> join = std::make_unique<NestedLoopJoinExecutor>(
-                                std::move(left), 
-                                std::move(right), std::move(x->conds_));
-            return join;
+            if (x->tag == T_SortMerge) {
+                auto left_scan = std::dynamic_pointer_cast<ScanPlan>(x->left_);
+                auto right_scan = std::dynamic_pointer_cast<ScanPlan>(x->right_);
+                bool left_presorted_hint = (left_scan != nullptr && left_scan->tag == T_IndexScan);
+                bool right_presorted_hint = (right_scan != nullptr && right_scan->tag == T_IndexScan);
+                return std::make_unique<SortMergeJoinExecutor>(std::move(left), std::move(right),
+                                                               std::move(x->conds_),
+                                                               x->query_table_order_,
+                                                               left_presorted_hint,
+                                                               right_presorted_hint);
+            }
+            return std::make_unique<NestedLoopJoinExecutor>(std::move(left), std::move(right),
+                                                            std::move(x->conds_));
         } else if(auto x = std::dynamic_pointer_cast<SortPlan>(plan)) {
             return std::make_unique<SortExecutor>(convert_plan_executor(x->subplan_, context), 
                                             x->sel_col_, x->is_desc_);

@@ -162,21 +162,21 @@ void QlManager::select_from(std::unique_ptr<AbstractExecutor> executorTreeRoot, 
     rec_printer.print_separator(context);
     rec_printer.print_record(captions, context);
     rec_printer.print_separator(context);
-    // print header into file
-    std::fstream outfile;
-    outfile.open("output.txt", std::ios::out | std::ios::app);
+    std::ofstream outfile("output.txt", std::ios::out | std::ios::app);
     outfile << "|";
-    for(int i = 0; i < captions.size(); ++i) {
+    for (int i = 0; i < static_cast<int>(captions.size()); ++i) {
         outfile << " " << captions[i] << " |";
     }
     outfile << "\n";
 
     // Print records
     size_t num_rec = 0;
+    std::vector<std::string> columns;
+    columns.reserve(executorTreeRoot->cols().size());
     // 执行query_plan
     for (executorTreeRoot->beginTuple(); !executorTreeRoot->is_end(); executorTreeRoot->nextTuple()) {
         auto Tuple = executorTreeRoot->Next();
-        std::vector<std::string> columns;
+        columns.clear();
         for (auto &col : executorTreeRoot->cols()) {
             std::string col_str;
             char *rec_buf = Tuple->data + col.offset;
@@ -192,9 +192,9 @@ void QlManager::select_from(std::unique_ptr<AbstractExecutor> executorTreeRoot, 
         }
         // print record into buffer
         rec_printer.print_record(columns, context);
-        // print record into file
+        // append record into output.txt
         outfile << "|";
-        for(int i = 0; i < columns.size(); ++i) {
+        for (int i = 0; i < static_cast<int>(columns.size()); ++i) {
             outfile << " " << columns[i] << " |";
         }
         outfile << "\n";
