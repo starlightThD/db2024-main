@@ -79,6 +79,7 @@ single_op ";"|"("|")"|","|"*"|"="|">"|"<"|"."
 "FLOAT" { return FLOAT; }
 "INDEX" { return INDEX; }
 "AND" { return AND; }
+"IN" { return IN; }
 "OR" { return OR; }
 "JOIN" { return JOIN; }
 "GROUP" { return GROUP; }
@@ -107,6 +108,7 @@ single_op ";"|"("|")"|","|"*"|"="|">"|"<"|"."
     /* operators */
 ">=" { return GEQ; }
 "<=" { return LEQ; }
+"!=" { return NEQ; }
 "<>" { return NEQ; }
 {single_op} { return yytext[0]; }
     /* id */

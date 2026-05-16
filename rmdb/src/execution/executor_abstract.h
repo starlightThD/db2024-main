@@ -66,21 +66,90 @@ class AbstractExecutor {
             case OP_GT: return cmp > 0;
             case OP_LE: return cmp <= 0;
             case OP_GE: return cmp >= 0;
+            case OP_IN: return cmp == 0;
         }
         return false;
     }
 
+    static bool is_numeric_type(ColType type) { return type == TYPE_INT || type == TYPE_FLOAT; }
+
+    static int compare_numeric_values(ColType lhs_type, const char *lhs, const Value &rhs_val) {
+        double lhs_num = lhs_type == TYPE_INT ? static_cast<double>(*reinterpret_cast<const int *>(lhs))
+                                              : static_cast<double>(*reinterpret_cast<const float *>(lhs));
+        double rhs_num = rhs_val.type == TYPE_INT ? static_cast<double>(rhs_val.int_val)
+                                                  : static_cast<double>(rhs_val.float_val);
+        return (lhs_num > rhs_num) - (lhs_num < rhs_num);
+    }
+
     bool eval_cond(const std::vector<ColMeta> &rec_cols, const RmRecord *rec, const Condition &cond) {
-        auto lhs_col = get_col(rec_cols, cond.lhs_col);
-        const char *lhs = rec->data + lhs_col->offset;
+        if (cond.is_rhs_null) {
+            return false;
+        }
+        std::vector<ColMeta>::const_iterator lhs_col;
+        const char *lhs = nullptr;
+        ColType lhs_type;
+        int lhs_len = 0;
+        if (cond.is_lhs_val) {
+            lhs_type = cond.lhs_val.type;
+            if (lhs_type != TYPE_STRING) {
+                lhs = cond.lhs_val.raw->data;
+                lhs_len = static_cast<int>(cond.lhs_val.raw->size);
+            }
+        } else {
+            lhs_col = get_col(rec_cols, cond.lhs_col);
+            lhs = rec->data + lhs_col->offset;
+            lhs_type = lhs_col->type;
+            lhs_len = lhs_col->len;
+        }
         const char *rhs = nullptr;
+        if (cond.is_rhs_set) {
+            if (lhs_type == TYPE_STRING) {
+                std::string lhs_str;
+                if (cond.is_lhs_val) {
+                    lhs_str = cond.lhs_val.str_val;
+                } else {
+                    lhs_str = std::string(lhs, lhs_len);
+                    lhs_str.resize(strlen(lhs_str.c_str()));
+                }
+                for (const auto &rhs_val : cond.rhs_vals) {
+                    if (lhs_str == rhs_val.str_val) {
+                        return true;
+                    }
+                }
+                return false;
+            }
+            for (const auto &rhs_val : cond.rhs_vals) {
+                if (is_numeric_type(lhs_type) && is_numeric_type(rhs_val.type)) {
+                    if (compare_numeric_values(lhs_type, lhs, rhs_val) == 0) {
+                        return true;
+                    }
+                } else if (compare_raw(lhs, rhs_val.raw->data, lhs_type, lhs_len) == 0) {
+                    return true;
+                }
+            }
+            return false;
+        }
         if (cond.is_rhs_val) {
+            if (lhs_type == TYPE_STRING && cond.rhs_val.raw == nullptr) {
+                std::string lhs_str;
+                if (cond.is_lhs_val) {
+                    lhs_str = cond.lhs_val.str_val;
+                } else {
+                    lhs_str = std::string(lhs, lhs_len);
+                    lhs_str.resize(strlen(lhs_str.c_str()));
+                }
+                int cmp = lhs_str.compare(cond.rhs_val.str_val);
+                return compare_result((cmp > 0) - (cmp < 0), cond.op);
+            }
+            if (is_numeric_type(lhs_type) && is_numeric_type(cond.rhs_val.type) && lhs_type != cond.rhs_val.type) {
+                return compare_result(compare_numeric_values(lhs_type, lhs, cond.rhs_val), cond.op);
+            }
             rhs = cond.rhs_val.raw->data;
         } else {
             auto rhs_col = get_col(rec_cols, cond.rhs_col);
             rhs = rec->data + rhs_col->offset;
         }
-        return compare_result(compare_raw(lhs, rhs, lhs_col->type, lhs_col->len), cond.op);
+        return compare_result(compare_raw(lhs, rhs, lhs_type, lhs_len), cond.op);
     }
 
     bool eval_conds(const std::vector<ColMeta> &rec_cols, const RmRecord *rec, const std::vector<Condition> &conds) {

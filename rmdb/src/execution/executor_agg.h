@@ -181,9 +181,16 @@ class AggExecutor : public AbstractExecutor {
 
     Value value_from_nonagg(const SelectItem &item, const GroupState &group) {
         auto it = get_col(prev_->cols(), item.col);
+        auto group_it = std::find_if(group_by_cols_.begin(), group_by_cols_.end(), [&](const TabCol &group_col) {
+            return group_col.tab_name == item.col.tab_name && group_col.col_name == item.col.col_name;
+        });
+        if (group_it == group_by_cols_.end()) {
+            throw RMDBError("Non-aggregate select item is not present in GROUP BY");
+        }
+        size_t group_idx = static_cast<size_t>(group_it - group_by_cols_.begin());
         Value v;
         v.type = it->type;
-        const char *p = group.group_vals[0]->data;
+        const char *p = group.group_vals[group_idx]->data;
         if (it->type == TYPE_INT) {
             v.set_int(*reinterpret_cast<const int *>(p));
         } else if (it->type == TYPE_FLOAT) {
@@ -326,32 +333,41 @@ class AggExecutor : public AbstractExecutor {
         out_records_.clear();
 
         std::unordered_map<std::string, GroupState> groups;
+        std::vector<std::string> group_order;
         prev_->beginTuple();
         for (; !prev_->is_end(); prev_->nextTuple()) {
             auto rec = prev_->Next();
             if (rec == nullptr) continue;
             std::string key = group_by_cols_.empty() ? "__all__" : key_for_group(rec.get());
-            auto &state = groups[key];
-            if (state.group_vals.empty()) {
+            auto group_it = groups.find(key);
+            if (group_it == groups.end()) {
+                GroupState state;
                 for (const auto &tb_col : group_by_cols_) {
                     auto it = get_col(prev_->cols(), tb_col);
                     state.group_vals.push_back(read_col_as_record(rec.get(), *it));
                 }
                 state.agg_states.resize(agg_specs_.size());
+                group_order.push_back(key);
+                group_it = groups.emplace(key, std::move(state)).first;
             }
+            auto &state = group_it->second;
             for (size_t i = 0; i < agg_specs_.size(); ++i) {
                 update_agg_state(state.agg_states[i], agg_specs_[i], rec.get());
             }
         }
 
-        if (groups.empty() && group_by_cols_.empty()) {
+        bool only_count_aggs = std::all_of(select_exprs_.begin(), select_exprs_.end(), [](const SelectItem &item) {
+            return item.is_agg && (item.agg_type == ast::AGG_COUNT || item.agg_type == ast::AGG_COUNT_STAR);
+        });
+        if (groups.empty() && group_by_cols_.empty() && only_count_aggs) {
             GroupState state;
             state.agg_states.resize(agg_specs_.size());
+            group_order.push_back("__all__");
             groups["__all__"] = std::move(state);
         }
 
-        for (auto &kv : groups) {
-            auto &g = kv.second;
+        for (const auto &key : group_order) {
+            auto &g = groups[key];
             if (!pass_having(g)) continue;
             RmRecord rec(static_cast<int>(len_));
             for (size_t i = 0; i < select_exprs_.size(); ++i) {

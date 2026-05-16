@@ -282,27 +282,35 @@ void SmManager::create_index(const std::string& tab_name, const std::vector<std:
     int col_tot_len = 0;
     for (auto &col_name : col_names) {
         auto col = tab.get_col(col_name);
-        col->index = true;
         cols.push_back(*col);
         col_tot_len += col->len;
     }
     ix_manager_->create_index(tab_name, cols);
     auto ih = ix_manager_->open_index(tab_name, cols);
-    RmFileHandle *fh = fhs_.at(tab_name).get();
-    for (RmScan scan(fh); !scan.is_end(); scan.next()) {
-        Rid rid = scan.rid();
-        auto rec = fh->get_record(rid, context);
-        std::vector<char> key(col_tot_len);
-        int offset = 0;
-        for (auto &col : cols) {
-            memcpy(key.data() + offset, rec->data + col.offset, col.len);
-            offset += col.len;
+    try {
+        RmFileHandle *fh = fhs_.at(tab_name).get();
+        for (RmScan scan(fh); !scan.is_end(); scan.next()) {
+            Rid rid = scan.rid();
+            auto rec = fh->get_record(rid, context);
+            std::vector<char> key(col_tot_len);
+            int offset = 0;
+            for (auto &col : cols) {
+                memcpy(key.data() + offset, rec->data + col.offset, col.len);
+                offset += col.len;
+            }
+            std::vector<Rid> existed;
+            if (ih->get_value(key.data(), &existed, context->txn_)) {
+                throw InternalError("Duplicate key violates unique index");
+            }
+            ih->insert_entry(key.data(), rid, context->txn_);
         }
-        std::vector<Rid> existed;
-        if (ih->get_value(key.data(), &existed, context->txn_)) {
-            throw InternalError("Duplicate key violates unique index");
-        }
-        ih->insert_entry(key.data(), rid, context->txn_);
+    } catch (...) {
+        ix_manager_->close_index(ih.get());
+        ix_manager_->destroy_index(tab_name, cols);
+        throw;
+    }
+    for (auto &col_name : col_names) {
+        tab.get_col(col_name)->index = true;
     }
     IndexMeta index_meta{.tab_name = tab_name, .col_tot_len = col_tot_len,
                          .col_num = static_cast<int>(cols.size()), .cols = cols};
@@ -331,10 +339,13 @@ void SmManager::drop_index(const std::string& tab_name, const std::vector<std::s
         ihs_.erase(ih);
     }
     ix_manager_->destroy_index(tab_name, cols);
-    for (auto &col : cols) {
-        tab.get_col(col.name)->index = false;
-    }
     tab.indexes.erase(index);
+    for (auto &col : tab.cols) {
+        col.index = std::any_of(tab.indexes.begin(), tab.indexes.end(), [&](const IndexMeta &remaining_index) {
+            return std::any_of(remaining_index.cols.begin(), remaining_index.cols.end(),
+                               [&](const ColMeta &index_col) { return index_col.name == col.name; });
+        });
+    }
     flush_meta();
 }
 

@@ -342,11 +342,14 @@ void Analyze::get_clause(const std::vector<std::shared_ptr<ast::BinaryExpr>> &sv
     conds.clear();
     for (auto &expr : sv_conds) {
         Condition cond;
-        auto lhs_col = std::dynamic_pointer_cast<ast::Col>(expr->lhs);
-        if (!lhs_col) {
-            throw RMDBError("Only column is supported on condition lhs in current execution pipeline");
+        if (auto lhs_col = std::dynamic_pointer_cast<ast::Col>(expr->lhs)) {
+            cond.lhs_col = {.tab_name = lhs_col->tab_name, .col_name = lhs_col->col_name};
+        } else if (auto lhs_val = std::dynamic_pointer_cast<ast::Value>(expr->lhs)) {
+            cond.is_lhs_val = true;
+            cond.lhs_val = convert_sv_value(lhs_val);
+        } else {
+            throw RMDBError("Only value/column is supported on condition lhs in current execution pipeline");
         }
-        cond.lhs_col = {.tab_name = lhs_col->tab_name, .col_name = lhs_col->col_name};
         cond.op = convert_sv_comp_op(expr->op);
         if (auto rhs_val = std::dynamic_pointer_cast<ast::Value>(expr->rhs)) {
             cond.is_rhs_val = true;
@@ -354,8 +357,18 @@ void Analyze::get_clause(const std::vector<std::shared_ptr<ast::BinaryExpr>> &sv
         } else if (auto rhs_col = std::dynamic_pointer_cast<ast::Col>(expr->rhs)) {
             cond.is_rhs_val = false;
             cond.rhs_col = {.tab_name = rhs_col->tab_name, .col_name = rhs_col->col_name};
+        } else if (auto rhs_subquery = std::dynamic_pointer_cast<ast::SubqueryExpr>(expr->rhs)) {
+            cond.is_rhs_val = false;
+            cond.is_rhs_subquery = true;
+            cond.rhs_query = do_analyze(rhs_subquery->query);
+        } else if (auto rhs_value_list = std::dynamic_pointer_cast<ast::ValueList>(expr->rhs)) {
+            cond.is_rhs_val = false;
+            cond.is_rhs_set = true;
+            for (auto &rhs_val : rhs_value_list->vals) {
+                cond.rhs_vals.push_back(convert_sv_value(rhs_val));
+            }
         } else {
-            throw RMDBError("Only value/column is supported on condition rhs in current execution pipeline");
+            throw RMDBError("Only value/column/subquery/value-list is supported on condition rhs in current execution pipeline");
         }
         conds.push_back(cond);
     }
@@ -365,13 +378,22 @@ void Analyze::check_clause(const std::vector<std::string> &tab_names, std::vecto
     std::vector<ColMeta> all_cols;
     get_all_cols(tab_names, all_cols);
     for (auto &cond : conds) {
-        cond.lhs_col = check_column(all_cols, cond.lhs_col);
-        if (!cond.is_rhs_val) {
+        if (!cond.is_lhs_val) {
+            cond.lhs_col = check_column(all_cols, cond.lhs_col);
+        }
+        if (!cond.is_rhs_val && !cond.is_rhs_set && !cond.is_rhs_subquery) {
             cond.rhs_col = check_column(all_cols, cond.rhs_col);
         }
-        TabMeta &lhs_tab = sm_manager_->db_.get_table(cond.lhs_col.tab_name);
-        auto lhs_col = lhs_tab.get_col(cond.lhs_col.col_name);
-        ColType lhs_type = lhs_col->type;
+        ColType lhs_type;
+        int lhs_len = 0;
+        if (cond.is_lhs_val) {
+            lhs_type = cond.lhs_val.type;
+        } else {
+            TabMeta &lhs_tab = sm_manager_->db_.get_table(cond.lhs_col.tab_name);
+            auto lhs_col = lhs_tab.get_col(cond.lhs_col.col_name);
+            lhs_type = lhs_col->type;
+            lhs_len = lhs_col->len;
+        }
         ColType rhs_type;
         if (cond.is_rhs_val) {
             if (lhs_type == TYPE_FLOAT && cond.rhs_val.type == TYPE_INT) {
@@ -380,15 +402,33 @@ void Analyze::check_clause(const std::vector<std::string> &tab_names, std::vecto
             if (cond.rhs_val.type != lhs_type) {
                 throw IncompatibleTypeError(coltype2str(lhs_type), coltype2str(cond.rhs_val.type));
             }
-            cond.rhs_val.init_raw(lhs_col->len);
+            if (!cond.is_lhs_val) {
+                cond.rhs_val.init_raw(lhs_len);
+            }
             rhs_type = cond.rhs_val.type;
-        } else {
+        } else if (cond.is_rhs_set) {
+            for (auto &rhs_val : cond.rhs_vals) {
+                if (!is_comparable_type(lhs_type, rhs_val.type)) {
+                    throw IncompatibleTypeError(coltype2str(lhs_type), coltype2str(rhs_val.type));
+                }
+                if (lhs_type == TYPE_FLOAT && rhs_val.type == TYPE_INT) {
+                    rhs_val.set_float(static_cast<float>(rhs_val.int_val));
+                }
+                if (!cond.is_lhs_val && rhs_val.type == lhs_type && rhs_val.type != TYPE_STRING) {
+                    rhs_val.init_raw(lhs_len);
+                }
+            }
+            rhs_type = lhs_type;
+        } else if (!cond.is_rhs_set && !cond.is_rhs_subquery) {
             TabMeta &rhs_tab = sm_manager_->db_.get_table(cond.rhs_col.tab_name);
             auto rhs_col = rhs_tab.get_col(cond.rhs_col.col_name);
             rhs_type = rhs_col->type;
         }
-        if (lhs_type != rhs_type) {
+        if (!cond.is_rhs_subquery && lhs_type != rhs_type) {
             throw IncompatibleTypeError(coltype2str(lhs_type), coltype2str(rhs_type));
+        }
+        if (cond.is_lhs_val && !cond.is_rhs_subquery) {
+            throw RMDBError("Value lhs is only supported with subquery rhs in current execution pipeline");
         }
     }
 }
@@ -411,6 +451,15 @@ CompOp Analyze::convert_sv_comp_op(ast::SvCompOp op) {
     std::map<ast::SvCompOp, CompOp> m = {
         {ast::SV_OP_EQ, OP_EQ}, {ast::SV_OP_NE, OP_NE}, {ast::SV_OP_LT, OP_LT},
         {ast::SV_OP_GT, OP_GT}, {ast::SV_OP_LE, OP_LE}, {ast::SV_OP_GE, OP_GE},
+        {ast::SV_OP_IN, OP_IN},
     };
     return m.at(op);
+}
+
+bool Analyze::is_comparable_type(ColType lhs_type, ColType rhs_type) {
+    if (lhs_type == rhs_type) {
+        return true;
+    }
+    return (lhs_type == TYPE_INT && rhs_type == TYPE_FLOAT) ||
+           (lhs_type == TYPE_FLOAT && rhs_type == TYPE_INT);
 }

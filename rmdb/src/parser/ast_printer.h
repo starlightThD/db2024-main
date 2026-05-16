@@ -58,6 +58,7 @@ private:
                 {SV_OP_GT, ">"},
                 {SV_OP_LE, "<="},
                 {SV_OP_GE, ">="},
+                {SV_OP_IN, "IN"},
         };
         return m.at(op);
     }
@@ -113,6 +114,9 @@ private:
             std::cout << "ALIAS_EXPR\n";
             print_node(x->expr, offset);
             print_val(x->alias, offset);
+        } else if (auto x = std::dynamic_pointer_cast<SubqueryExpr>(node)) {
+            std::cout << "SUBQUERY_EXPR\n";
+            print_node(x->query, offset);
         } else if (auto x = std::dynamic_pointer_cast<TypeLen>(node)) {
             std::cout << "TYPE_LEN\n";
             print_val(type2str(x->type), offset);

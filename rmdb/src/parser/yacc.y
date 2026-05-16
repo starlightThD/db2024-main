@@ -22,7 +22,7 @@ using namespace ast;
 
 // keywords
 %token SHOW TABLES CREATE TABLE DROP DESC INSERT INTO VALUES DELETE FROM ASC ORDER BY AS
-WHERE UPDATE SET SELECT INT CHAR FLOAT INDEX AND OR JOIN EXIT HELP TXN_BEGIN TXN_COMMIT TXN_ABORT TXN_ROLLBACK ORDER_BY ENABLE_NESTLOOP ENABLE_SORTMERGE
+WHERE UPDATE SET SELECT INT CHAR FLOAT INDEX AND IN OR JOIN EXIT HELP TXN_BEGIN TXN_COMMIT TXN_ABORT TXN_ROLLBACK ORDER_BY ENABLE_NESTLOOP ENABLE_SORTMERGE
 %token GROUP HAVING COUNT SUM AVG MIN MAX
 // non-keywords
 %token LEQ NEQ GEQ T_EOF
@@ -35,6 +35,7 @@ WHERE UPDATE SET SELECT INT CHAR FLOAT INDEX AND OR JOIN EXIT HELP TXN_BEGIN TXN
 
 // specify types for non-terminal symbol
 %type <sv_node> stmt dbStmt ddl dml txnStmt setStmt
+%type <sv_select_stmt> selectStmt subquery
 %type <sv_field> field
 %type <sv_fields> fieldList
 %type <sv_type_len> type
@@ -165,7 +166,14 @@ dml:
     {
         $$ = std::make_shared<UpdateStmt>($2, $4, $5);
     }
-    |   SELECT selector FROM tableList optWhereClause optGroupByClause optHavingClause opt_order_clause
+    |   selectStmt
+    {
+        $$ = $1;
+    }
+    ;
+
+selectStmt:
+        SELECT selector FROM tableList optWhereClause optGroupByClause optHavingClause opt_order_clause
     {
         $$ = std::make_shared<SelectStmt>($2, $4, $5, $6, $7, $8);
     }
@@ -259,6 +267,25 @@ condition:
         expr op expr
     {
         $$ = std::make_shared<BinaryExpr>($1, $2, $3);
+    }
+    |   expr op subquery
+    {
+        $$ = std::make_shared<BinaryExpr>($1, $2, std::make_shared<SubqueryExpr>($3));
+    }
+    |   expr IN subquery
+    {
+        $$ = std::make_shared<BinaryExpr>($1, SV_OP_IN, std::make_shared<SubqueryExpr>($3));
+    }
+    |   expr IN '(' valueList ')'
+    {
+        $$ = std::make_shared<BinaryExpr>($1, SV_OP_IN, std::make_shared<ValueList>($4));
+    }
+    ;
+
+subquery:
+        '(' selectStmt ')'
+    {
+        $$ = $2;
     }
     ;
 
