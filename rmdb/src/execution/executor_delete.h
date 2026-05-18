@@ -37,17 +37,25 @@ class DeleteExecutor : public AbstractExecutor {
     }
 
     std::unique_ptr<RmRecord> Next() override {
+        if (context_ != nullptr && context_->lock_mgr_ != nullptr && context_->txn_ != nullptr) {
+            if (tab_.indexes.empty()) {
+                context_->lock_mgr_->lock_exclusive_on_table(context_->txn_, fh_->GetFd());
+            } else {
+                context_->lock_mgr_->lock_IX_on_table(context_->txn_, fh_->GetFd());
+            }
+        }
         for (auto &rid : rids_) {
+            if (context_ != nullptr && context_->lock_mgr_ != nullptr && context_->txn_ != nullptr) {
+                context_->lock_mgr_->lock_exclusive_on_record(context_->txn_, rid, fh_->GetFd());
+            }
             auto rec = fh_->get_record(rid, context_);
             for (auto &index : tab_.indexes) {
                 auto ih = sm_manager_->ihs_.at(sm_manager_->get_ix_manager()->get_index_name(tab_name_, index.cols)).get();
-                std::vector<char> key(index.col_tot_len);
-                int offset = 0;
-                for (auto &col : index.cols) {
-                    memcpy(key.data() + offset, rec->data + col.offset, col.len);
-                    offset += col.len;
-                }
+                auto key = make_index_key(index, *rec);
                 ih->delete_entry(key.data(), context_->txn_);
+            }
+            if (context_ != nullptr && context_->txn_ != nullptr) {
+                context_->txn_->append_write_record(new WriteRecord(WType::DELETE_TUPLE, tab_name_, rid, *rec));
             }
             fh_->delete_record(rid, context_);
         }

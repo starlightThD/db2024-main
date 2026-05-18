@@ -244,6 +244,9 @@ void SmManager::drop_table(const std::string& tab_name, Context* context) {
     if (!db_.is_table(tab_name)) {
         throw TableNotFoundError(tab_name);
     }
+    if (context != nullptr && context->lock_mgr_ != nullptr && context->txn_ != nullptr) {
+        context->lock_mgr_->lock_exclusive_on_table(context->txn_, fhs_.at(tab_name)->GetFd());
+    }
     auto &tab = db_.get_table(tab_name);
     for (auto &index : tab.indexes) {
         auto ix_name = ix_manager_->get_index_name(tab_name, index.cols);
@@ -273,6 +276,9 @@ void SmManager::drop_table(const std::string& tab_name, Context* context) {
 void SmManager::create_index(const std::string& tab_name, const std::vector<std::string>& col_names, Context* context) {
     if (!db_.is_table(tab_name)) {
         throw TableNotFoundError(tab_name);
+    }
+    if (context != nullptr && context->lock_mgr_ != nullptr && context->txn_ != nullptr) {
+        context->lock_mgr_->lock_exclusive_on_table(context->txn_, fhs_.at(tab_name)->GetFd());
     }
     TabMeta &tab = db_.get_table(tab_name);
     if (tab.is_index(col_names)) {
@@ -328,6 +334,9 @@ void SmManager::create_index(const std::string& tab_name, const std::vector<std:
 void SmManager::drop_index(const std::string& tab_name, const std::vector<std::string>& col_names, Context* context) {
     if (!db_.is_table(tab_name)) {
         throw TableNotFoundError(tab_name);
+    }
+    if (context != nullptr && context->lock_mgr_ != nullptr && context->txn_ != nullptr) {
+        context->lock_mgr_->lock_exclusive_on_table(context->txn_, fhs_.at(tab_name)->GetFd());
     }
     TabMeta &tab = db_.get_table(tab_name);
     auto index = tab.get_index_meta(col_names);

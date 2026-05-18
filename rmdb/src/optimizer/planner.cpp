@@ -67,6 +67,12 @@ bool Planner::get_index_cols(std::string tab_name, std::vector<Condition> curr_c
         index_col_names = std::move(best_index);
         return true;
     }
+    if (!tab.indexes.empty()) {
+        for (auto &col : tab.indexes.front().cols) {
+            index_col_names.push_back(col.name);
+        }
+        return true;
+    }
     return false;
 }
 

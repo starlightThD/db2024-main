@@ -52,14 +52,20 @@ class InsertExecutor : public AbstractExecutor {
             val.init_raw(col.len);
             memcpy(rec.data + col.offset, val.raw->data, col.len);
         }
+        if (context_ != nullptr && context_->lock_mgr_ != nullptr && context_->txn_ != nullptr) {
+            if (tab_.indexes.empty()) {
+                context_->lock_mgr_->lock_exclusive_on_table(context_->txn_, fh_->GetFd());
+            } else {
+                context_->lock_mgr_->lock_IX_on_table(context_->txn_, fh_->GetFd());
+            }
+        }
         std::vector<std::vector<char>> keys;
         for (auto &index : tab_.indexes) {
             auto ih = sm_manager_->ihs_.at(sm_manager_->get_ix_manager()->get_index_name(tab_name_, index.cols)).get();
-            std::vector<char> key(index.col_tot_len);
-            int offset = 0;
-            for (auto &col : index.cols) {
-                memcpy(key.data() + offset, rec.data + col.offset, col.len);
-                offset += col.len;
+            auto key = make_index_key(index, rec);
+            if (context_ != nullptr && context_->lock_mgr_ != nullptr && context_->txn_ != nullptr) {
+                auto gap_lock_id = make_point_gap_lock_data_id(ih->GetFd(), index, key);
+                context_->lock_mgr_->lock_exclusive_on_gap(context_->txn_, gap_lock_id);
             }
             std::vector<Rid> existed;
             if (ih->get_value(key.data(), &existed, context_->txn_)) {
@@ -69,6 +75,9 @@ class InsertExecutor : public AbstractExecutor {
         }
 
         rid_ = fh_->insert_record(rec.data, context_);
+        if (context_ != nullptr && context_->txn_ != nullptr) {
+            context_->txn_->append_write_record(new WriteRecord(WType::INSERT_TUPLE, tab_name_, rid_));
+        }
 
         for (size_t i = 0; i < tab_.indexes.size(); ++i) {
             auto &index = tab_.indexes[i];

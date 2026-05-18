@@ -11,6 +11,8 @@ See the Mulan PSL v2 for more details. */
 #pragma once
 
 #include <atomic>
+#include <string>
+#include <vector>
 
 #include "common/config.h"
 #include "defs.h"
@@ -65,8 +67,8 @@ class WriteRecord {
     RmRecord record_;
 };
 
-/* 多粒度锁，加锁对象的类型，包括记录和表 */
-enum class LockDataType { TABLE = 0, RECORD = 1 };
+/* 多粒度锁，加锁对象的类型，包括记录、表和索引间隙 */
+enum class LockDataType { TABLE = 0, RECORD = 1, GAP = 2 };
 
 /**
  * @description: 加锁对象的唯一标识
@@ -90,30 +92,91 @@ class LockDataId {
         type_ = type;
     }
 
+    /* 索引区间锁 */
+    LockDataId(int fd, const std::vector<char> &lower_key, bool lower_inf, bool lower_closed,
+               const std::vector<char> &upper_key, bool upper_inf, bool upper_closed,
+               const std::vector<ColType> &col_types, const std::vector<int> &col_lens, LockDataType type) {
+        assert(type == LockDataType::GAP);
+        fd_ = fd;
+        type_ = type;
+        rid_.page_no = -1;
+        rid_.slot_no = -1;
+        gap_lower_key_ = lower_key;
+        gap_upper_key_ = upper_key;
+        gap_lower_inf_ = lower_inf;
+        gap_upper_inf_ = upper_inf;
+        gap_lower_closed_ = lower_closed;
+        gap_upper_closed_ = upper_closed;
+        gap_col_types_ = col_types;
+        gap_col_lens_ = col_lens;
+    }
+
     inline int64_t Get() const {
         if (type_ == LockDataType::TABLE) {
             // fd_
             return static_cast<int64_t>(fd_);
-        } else {
+        } else if (type_ == LockDataType::RECORD) {
             // fd_, rid_.page_no, rid.slot_no
             return ((static_cast<int64_t>(type_)) << 63) | ((static_cast<int64_t>(fd_)) << 31) |
                    ((static_cast<int64_t>(rid_.page_no)) << 16) | rid_.slot_no;
+        } else {
+            return ((static_cast<int64_t>(type_)) << 62) | static_cast<int64_t>(fd_);
         }
     }
 
     bool operator==(const LockDataId &other) const {
         if (type_ != other.type_) return false;
         if (fd_ != other.fd_) return false;
+        if (type_ == LockDataType::GAP) {
+            return gap_lower_inf_ == other.gap_lower_inf_ && gap_upper_inf_ == other.gap_upper_inf_ &&
+                   gap_lower_closed_ == other.gap_lower_closed_ && gap_upper_closed_ == other.gap_upper_closed_ &&
+                   gap_lower_key_ == other.gap_lower_key_ && gap_upper_key_ == other.gap_upper_key_ &&
+                   gap_col_types_ == other.gap_col_types_ && gap_col_lens_ == other.gap_col_lens_;
+        }
         return rid_ == other.rid_;
     }
     int fd_;
     Rid rid_;
     LockDataType type_;
+    std::vector<char> gap_lower_key_;
+    std::vector<char> gap_upper_key_;
+    std::vector<ColType> gap_col_types_;
+    std::vector<int> gap_col_lens_;
+    bool gap_lower_inf_{false};
+    bool gap_upper_inf_{false};
+    bool gap_lower_closed_{false};
+    bool gap_upper_closed_{false};
 };
 
 template <>
 struct std::hash<LockDataId> {
-    size_t operator()(const LockDataId &obj) const { return std::hash<int64_t>()(obj.Get()); }
+    size_t operator()(const LockDataId &obj) const {
+        size_t seed = std::hash<int64_t>()(obj.Get());
+        auto hash_combine = [&](size_t value) {
+            seed ^= value + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+        };
+        if (obj.type_ == LockDataType::GAP) {
+            hash_combine(std::hash<int>()(obj.fd_));
+            hash_combine(std::hash<int>()(static_cast<int>(obj.type_)));
+            hash_combine(std::hash<bool>()(obj.gap_lower_inf_));
+            hash_combine(std::hash<bool>()(obj.gap_upper_inf_));
+            hash_combine(std::hash<bool>()(obj.gap_lower_closed_));
+            hash_combine(std::hash<bool>()(obj.gap_upper_closed_));
+            for (char ch : obj.gap_lower_key_) {
+                hash_combine(std::hash<int>()(static_cast<unsigned char>(ch)));
+            }
+            for (char ch : obj.gap_upper_key_) {
+                hash_combine(std::hash<int>()(static_cast<unsigned char>(ch)));
+            }
+            for (auto type : obj.gap_col_types_) {
+                hash_combine(std::hash<int>()(static_cast<int>(type)));
+            }
+            for (int len : obj.gap_col_lens_) {
+                hash_combine(std::hash<int>()(len));
+            }
+        }
+        return seed;
+    }
 };
 
 /* 事务回滚原因 */

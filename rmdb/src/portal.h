@@ -77,7 +77,8 @@ class Portal
                     
                 case T_Update:
                 {
-                    std::unique_ptr<AbstractExecutor> scan= convert_plan_executor(x->subplan_, context);
+                    std::unique_ptr<AbstractExecutor> scan= convert_plan_executor(x->subplan_, context,
+                                                                                  ScanLockMode::WRITE);
                     std::vector<Rid> rids;
                     for (scan->beginTuple(); !scan->is_end(); scan->nextTuple()) {
                         rids.push_back(scan->rid());
@@ -88,7 +89,8 @@ class Portal
                 }
                 case T_Delete:
                 {
-                    std::unique_ptr<AbstractExecutor> scan= convert_plan_executor(x->subplan_, context);
+                    std::unique_ptr<AbstractExecutor> scan= convert_plan_executor(x->subplan_, context,
+                                                                                  ScanLockMode::WRITE);
                     std::vector<Rid> rids;
                     for (scan->beginTuple(); !scan->is_end(); scan->nextTuple()) {
                         rids.push_back(scan->rid());
@@ -154,30 +156,33 @@ class Portal
     void drop(){}
 
 
-    std::unique_ptr<AbstractExecutor> convert_plan_executor(std::shared_ptr<Plan> plan, Context *context)
+    std::unique_ptr<AbstractExecutor> convert_plan_executor(std::shared_ptr<Plan> plan, Context *context,
+                                                            ScanLockMode scan_lock_mode = ScanLockMode::READ)
     {
         if(auto x = std::dynamic_pointer_cast<ProjectionPlan>(plan)){
-            return std::make_unique<ProjectionExecutor>(convert_plan_executor(x->subplan_, context), 
+            return std::make_unique<ProjectionExecutor>(convert_plan_executor(x->subplan_, context, scan_lock_mode),
                                                         x->sel_cols_, x->output_names_);
         } else if(auto x = std::dynamic_pointer_cast<ScanPlan>(plan)) {
             if(x->tag == T_SeqScan) {
-                return std::make_unique<SeqScanExecutor>(sm_manager_, x->tab_name_, x->conds_, context);
+                return std::make_unique<SeqScanExecutor>(sm_manager_, x->tab_name_, x->conds_, context,
+                                                         scan_lock_mode);
             }
             else {
-                return std::make_unique<IndexScanExecutor>(sm_manager_, x->tab_name_, x->conds_, x->index_col_names_, context);
+                return std::make_unique<IndexScanExecutor>(sm_manager_, x->tab_name_, x->conds_,
+                                                           x->index_col_names_, context, scan_lock_mode);
             } 
         } else if(auto x = std::dynamic_pointer_cast<JoinPlan>(plan)) {
-            std::unique_ptr<AbstractExecutor> left = convert_plan_executor(x->left_, context);
-            std::unique_ptr<AbstractExecutor> right = convert_plan_executor(x->right_, context);
+            std::unique_ptr<AbstractExecutor> left = convert_plan_executor(x->left_, context, scan_lock_mode);
+            std::unique_ptr<AbstractExecutor> right = convert_plan_executor(x->right_, context, scan_lock_mode);
             std::unique_ptr<AbstractExecutor> join = std::make_unique<NestedLoopJoinExecutor>(
                                 std::move(left), 
                                 std::move(right), std::move(x->conds_));
             return join;
         } else if(auto x = std::dynamic_pointer_cast<SortPlan>(plan)) {
-            return std::make_unique<SortExecutor>(convert_plan_executor(x->subplan_, context), 
+            return std::make_unique<SortExecutor>(convert_plan_executor(x->subplan_, context, scan_lock_mode),
                                             x->sel_col_, x->is_desc_);
         } else if (auto x = std::dynamic_pointer_cast<AggPlan>(plan)) {
-            return std::make_unique<AggExecutor>(convert_plan_executor(x->subplan_, context), x->select_exprs_,
+            return std::make_unique<AggExecutor>(convert_plan_executor(x->subplan_, context, scan_lock_mode), x->select_exprs_,
                                                  x->group_by_cols_, x->having_conds_);
         }
         return nullptr;
